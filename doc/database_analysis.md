@@ -62,7 +62,7 @@ Hệ thống quản lý đồ án cho sinh viên Công nghệ Thông tin (bao g�
   - `accepted_by_lecturer_id` (FK - Nullable) — GV chính thức duyệt và nhận hướng dẫn.
   - `status` (PENDING, ACCEPTED, REJECTED)
   - `lecturer_feedback` — Nhận xét của GV khi từ chối.
-  - _Luồng xử lý_: Khi GV duyệt (`ACCEPTED`), hệ thống sẽ **tự động copy** dữ liệu tạo thành 1 record trong `topics` và tự động tạo một `registration_groups` có trạng thái `APPROVED` với chỉ mọt thành viên là sinh viên đó (trưởng nhóm).
+  - _Luồng xử lý_: Khi GV duyệt (`ACCEPTED`), hệ thống sẽ **tự động copy** dữ liệu tạo thành 1 record trong `topics` và tự động tạo một `registration_groups` có trạng thái `APPROVED` với chỉ **một** thành viên là sinh viên đó (trưởng nhóm).
 
 ### Nhóm 4: Quản lý Đề tài & Đăng ký (Topics & Registration)
 

@@ -19,7 +19,7 @@ Yêu cầu chức năng được phân tách rõ ràng theo từng nhóm đối 
   - Xem chi tiết đề tài (Mô tả, yêu cầu, GV hướng dẫn, số lượng slot).
 - **FR_STU_03 - Đăng ký đề tài:**
   - Chọn đề tài và đăng ký tham gia cá nhân (tự động tạo nhóm 1 người).
-  - Tạo nhóm, mời thêm thành viên, đợi đồng ý rồi trưởng nhóm nộp đăng ký để GV duyệt (xem chi tiết tại `group_feature_analysis.md`).
+  - Tạo nhóm, mời thêm thành viên, đợi đồng ý rồi trưởng nhóm nộp đăng ký để GV duyệt.
   - Hủy đăng ký (chỉ được phép khi nhóm chưa ở trạng thái APPROVED và còn trong thời hạn đăng ký).
 - **FR_STU_04 - Tự đề xuất đề tài:**
   - Nhập thông tin đề xuất đề tài mới (Tên, Mô tả, Mục tiêu).
@@ -101,7 +101,12 @@ Yêu cầu chức năng được phân tách rõ ràng theo từng nhóm đối 
 ### 1.4. Yêu cầu Hệ thống (System Requirements)
 
 - **FR_SYS_01 - Thông báo (Notifications):**
-  - Hệ thống tự động đẩy thông báo in-app (lưu vào bảng `notifications`) khi: Đề xuất được duyệt/từ chối, Sắp tới deadline nộp bài, Có điểm mới được nhập.
+  - Hệ thống tự động đẩy thông báo in-app (lưu vào bảng `notifications`) trong các trường hợp:
+    - Đề xuất đề tài được duyệt / từ chối.
+    - Được mời vào nhóm đăng ký / Nhóm đã được duyệt / Nhóm bị từ chối.
+    - Báo cáo nộp có nhận xét mới từ GV.
+    - Có điểm mới được nhập.
+    - Sắp tới deadline nộp báo cáo hoặc deadline chốt điểm.
 - **FR_SYS_02 - Gửi Email** _(v2 / Nice-to-have — ngoài phạm vi v1):_
   - Gửi email nhắc nhở deadline nộp bài, thông báo thay đổi lịch bảo vệ đến SV và GV.
   - Yêu cầu tích hợp dịch vụ SMTP hoặc bên thứ ba (SendGrid, Resend) — **không triển khai trong v1**.
