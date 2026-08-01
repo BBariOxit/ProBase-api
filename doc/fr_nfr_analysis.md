@@ -18,9 +18,9 @@ Yêu cầu chức năng được phân tách rõ ràng theo từng nhóm đối 
   - Tra cứu, lọc, tìm kiếm các đề tài đang được mở theo học kỳ và loại đồ án (Cơ sở, Chuyên ngành, Tốt nghiệp).
   - Xem chi tiết đề tài (Mô tả, yêu cầu, GV hướng dẫn, số lượng slot).
 - **FR_STU_03 - Đăng ký đề tài:**
-  - Chọn đề tài và đăng ký tham gia (đăng ký cá nhân).
-  - Hủy đăng ký (chỉ được phép khi hệ thống còn trong thời hạn đăng ký).
-  > ⚠️ _Tính năng lập nhóm/đăng ký theo nhóm sẽ được phân tích riêng — tạm thời ngoài phạm vi v1._
+  - Chọn đề tài và đăng ký tham gia cá nhân (tự động tạo nhóm 1 người).
+  - Tạo nhóm, mời thêm thành viên, đợi đồng ý rồi trưởng nhóm nộp đăng ký để GV duyệt (xem chi tiết tại `group_feature_analysis.md`).
+  - Hủy đăng ký (chỉ được phép khi nhóm chưa ở trạng thái APPROVED và còn trong thời hạn đăng ký).
 - **FR_STU_04 - Tự đề xuất đề tài:**
   - Nhập thông tin đề xuất đề tài mới (Tên, Mô tả, Mục tiêu).
   - Chỉ định một Giảng viên mong muốn hướng dẫn hoặc gửi công khai (không chỉ định).
@@ -38,6 +38,15 @@ Yêu cầu chức năng được phân tách rõ ràng theo từng nhóm đối 
   - Xem nhận xét, đánh giá từ giảng viên.
   - Xem lịch trình, địa điểm và thời gian bảo vệ đồ án.
 
+#### 1.1.1. Nhóm đăng ký (Group Registration)
+
+- **FR_STU_GRP_01:** Tạo nhóm đăng ký cho một đề tài (tự động trở thành trưởng nhóm).
+- **FR_STU_GRP_02:** Mời sinh viên khác vào nhóm theo mã SV hoặc email.
+- **FR_STU_GRP_03:** Nhận thông báo khi được mời, chấp nhận (`ACCEPTED`) hoặc từ chối (`DECLINED`) lời mời.
+- **FR_STU_GRP_04:** Trưởng nhóm có thể xóa thành viên đã ACCEPTED trước khi Submit.
+- **FR_STU_GRP_05:** Trưởng nhóm Submit đăng ký khi tất cả thành viên đã accept (không còn ai đang `INVITED`).
+- **FR_STU_GRP_06:** Xem trạng thái nhóm của bản thân (FORMING / SUBMITTED / APPROVED / REJECTED) và danh sách thành viên cùng nhóm.
+
 ### 1.2. Đối với Giảng viên (Lecturer)
 
 - **FR_LEC_01 - Quản lý tài khoản:**
@@ -48,7 +57,7 @@ Yêu cầu chức năng được phân tách rõ ràng theo từng nhóm đối 
   - Chỉnh sửa hoặc xóa đề tài (chỉ xóa được khi chưa có SV nào đăng ký).
   - Đóng/Mở trạng thái nhận thêm sinh viên của đề tài.
 - **FR_LEC_03 - Duyệt đăng ký & Đề xuất:**
-  - **Duyệt SV đăng ký:** Chấp nhận hoặc từ chối sinh viên đăng ký vào đề tài của mình.
+  - **Duyệt nhóm đăng ký:** Xem danh sách các nhóm đã Submit vào đề tài của mình, xem hồ sơ từng thành viên, chấp nhận (APPROVE) hoặc từ chối (REJECT) cả nhóm kèm lý do.
   - **Duyệt SV đề xuất:** Xem danh sách ý tưởng SV gửi lên, Chấp nhận hướng dẫn (tự động tạo thành đề tài chính thức) hoặc Từ chối kèm lý do phản hồi.
 - **FR_LEC_04 - Hướng dẫn & Theo dõi tiến độ:**
   - Giao task/nhiệm vụ cho sinh viên.
@@ -61,6 +70,13 @@ Yêu cầu chức năng được phân tách rõ ràng theo từng nhóm đối 
 - **FR_LEC_06 - Đánh giá Phản biện / Hội đồng:**
   - Nếu được phân công làm GV phản biện: Xem báo cáo của đề tài khác và nhập "Điểm phản biện".
   - Nếu nằm trong hội đồng: Xem danh sách đề tài bảo vệ ở hội đồng của mình, nhập "Điểm hội đồng".
+
+#### 1.2.1. Nhóm đăng ký (Group Registration)
+
+- **FR_LEC_GRP_01:** Xem danh sách các nhóm đã Submit đăng ký vào đề tài của mình.
+- **FR_LEC_GRP_02:** Xem hồ sơ (tên, mã SV, lớp, chuyên ngành) của từng thành viên trong nhóm trước khi duyệt.
+- **FR_LEC_GRP_03:** Duyệt (APPROVE) hoặc từ chối (REJECT) cả nhóm với lý do.
+- **FR_LEC_GRP_04:** Chấm điểm hướng dẫn riêng cho từng thành viên trong nhóm (`mentor_grade` trong `registration_group_members`).
 
 ### 1.3. Đối với Quản trị viên (Admin / Giáo vụ Khoa)
 

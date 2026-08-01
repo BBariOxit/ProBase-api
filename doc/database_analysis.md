@@ -9,7 +9,7 @@ Hệ thống quản lý đồ án cho sinh viên Công nghệ Thông tin (bao g�
 ### 🧑‍🎓 Sinh viên (Student)
 
 - **Quản lý đồ án**: Xem danh sách các đề tài đang mở, xem chi tiết đề tài.
-- **Đăng ký**: Đăng ký đề tài (cá nhân hoặc theo nhóm).
+- **Đăng ký**: Đăng ký đề tài cá nhân hoặc lập nhóm, mời thành viên, trưởng nhóm submit đăng ký để GV duyệt.
 - **Đề xuất đề tài**: Sinh viên tự đề xuất đề tài dựa trên ý tưởng cá nhân, gửi yêu cầu cho giảng viên mong muốn hướng dẫn.
 - **Thực hiện**: Quản lý tiến độ, task list, nộp báo cáo định kỳ/cuối kỳ (hỗ trợ nộp nhiều lần), nộp source code.
 - **Kết quả**: Xem nhận xét của giảng viên, xem điểm, lịch bảo vệ hội đồng.
@@ -62,22 +62,36 @@ Hệ thống quản lý đồ án cho sinh viên Công nghệ Thông tin (bao g�
   - `accepted_by_lecturer_id` (FK - Nullable) — GV chính thức duyệt và nhận hướng dẫn.
   - `status` (PENDING, ACCEPTED, REJECTED)
   - `lecturer_feedback` — Nhận xét của GV khi từ chối.
-  - _Luồng xử lý_: Khi GV duyệt (`ACCEPTED`), hệ thống sẽ **tự động copy** dữ liệu tạo thành 1 record trong `topics` và tự động tạo record đăng ký trong `topic_registrations` cho sinh viên đó.
+  - _Luồng xử lý_: Khi GV duyệt (`ACCEPTED`), hệ thống sẽ **tự động copy** dữ liệu tạo thành 1 record trong `topics` và tự động tạo một `registration_groups` có trạng thái `APPROVED` với chỉ mọt thành viên là sinh viên đó (trưởng nhóm).
 
 ### Nhóm 4: Quản lý Đề tài & Đăng ký (Topics & Registration)
 
 - **`topics`**: Danh sách đề tài chính thức (được GV đề xuất hoặc GV đã duyệt từ đề xuất của SV).
   - `id` (PK), `title`, `description`, `expected_outcomes`, `project_type_id` (FK), `semester_id` (FK), `lecturer_id` (FK - GV Hướng dẫn), `max_students`, `status` (PENDING, APPROVED, OPEN, IN_PROGRESS, COMPLETED), `source_proposal_id` (FK - Nullable, liên kết ngược lại đề xuất gốc nếu có).
-- **`topic_registrations`**: Đăng ký làm đề tài.
-  - `id` (PK), `topic_id` (FK), `student_id` (FK), `status` (REGISTERED, APPROVED, REJECTED), `mentor_grade` (Điểm hướng dẫn), `mentor_comment` (Nhận xét hướng dẫn).
+- **`registration_groups`**: Nhóm đăng ký đề tài (thay thế hoàn toàn `topic_registrations`).
+  - `id` (PK)
+  - `topic_id` (FK) — Đề tài muốn đăng ký.
+  - `semester_id` (FK) — Học kỳ đăng ký.
+  - `leader_id` (FK → `student_profiles`) — Trưởng nhóm (người tạo nhóm).
+  - `name` (Nullable) — Tên nhóm tự đặt.
+  - `status` (FORMING → SUBMITTED → APPROVED / REJECTED).
+  - `lecturer_feedback` (Nullable) — Lý do từ chối của GV.
+- **`registration_group_members`**: Thành viên của nhóm đăng ký.
+  - `id` (PK)
+  - `group_id` (FK → `registration_groups`)
+  - `student_id` (FK → `student_profiles`)
+  - `status` (INVITED → ACCEPTED / DECLINED) — Trưởng nhóm tự động `ACCEPTED`.
+  - `mentor_grade` (Float, Nullable) — Điểm hướng dẫn (chấm riêng từng người).
+  - `mentor_comment` (Text, Nullable) — Nhận xét của GV hướng dẫn.
+  - `joined_at` (DateTime, Nullable) — Thời điểm SV accept lời mời.
 
 ### Nhóm 5: Quản lý Tiến độ & Báo cáo (Progress & Submissions)
 
 - **`tasks`**: Giao việc / Phân công trong nhóm.
   - `id` (PK), `topic_id` (FK), `title`, `description`, `deadline`, `status` (TODO, IN_PROGRESS, DONE), `assigned_student_id` (FK).
-- **`submissions`**: Lịch sử nộp file / báo cáo.
-  - `id` (PK), `topic_id` (FK), `student_id` (FK), `submission_type` (MIDTERM, FINAL, SOURCE_CODE), `file_url` (Nullable - đường dẫn file upload), `submission_url` (Nullable - link GitHub/Drive...), `file_name`, `file_size`, `version` (Int - quản lý số lần nộp lại), `submitted_at`, `lecturer_feedback`.
-  > _(cập nhật: tách `file_url` và `submission_url`, thêm `file_name`, `file_size`, `mentor_comment`; hỗ trợ FR_STU_06, FR_LEC_04)_
+- **`submissions`**: Lịch sử nộp file / báo cáo (nộp theo nhóm).
+  - `id` (PK), `topic_id` (FK), `group_id` (FK → `registration_groups` - nhóm nộp bài), `submission_type` (MIDTERM, FINAL, SOURCE_CODE), `file_url` (Nullable - đường dẫn file upload), `submission_url` (Nullable - link GitHub/Drive...), `file_name`, `file_size`, `version` (Int - quản lý số lần nộp lại), `submitted_at`, `lecturer_feedback`.
+  > _(cập nhật: đổi `student_id` → `group_id` — nộp bài theo nhóm, không phải cá nhân; hỗ trợ FR_STU_06, FR_LEC_04)_
 
 ### Nhóm 6: Hội đồng bảo vệ (Councils)
 
@@ -88,7 +102,7 @@ Hệ thống quản lý đồ án cho sinh viên Công nghệ Thông tin (bao g�
 
 ### Nhóm 7: Thông báo hệ thống (Notifications)
 
-- **`notifications`**: Thông báo trạng thái (GV duyệt đề tài, báo cáo có nhận xét mới, deadline sắp tới...).
+- **`notifications`**: Thông báo trạng thái (GV duyệt nhóm, được mời vào nhóm, báo cáo có nhận xét mới, deadline sắp tới...).
   - `id` (PK), `user_id` (FK), `title`, `content`, `is_read`, `created_at`.
 
 ### Nhóm 8: Audit Log (Lịch sử thao tác nhạy cảm)
@@ -127,22 +141,26 @@ erDiagram
     LECTURER_PROFILE ||--o{ TOPIC_PROPOSAL : "requests/accepts"
     TOPIC_PROPOSAL ||--o| TOPIC : "converted to (when accepted)"
 
-    %% Core Project Flow
+    %% Core Project Flow (Group Registration)
     LECTURER_PROFILE ||--o{ TOPIC : "proposes/mentors"
-    TOPIC ||--o{ TOPIC_REGISTRATION : "has"
-    STUDENT_PROFILE ||--o{ TOPIC_REGISTRATION : "registers"
+    TOPIC ||--o{ REGISTRATION_GROUP : "receives registration"
+    SEMESTER ||--o{ REGISTRATION_GROUP : "contains"
+    STUDENT_PROFILE ||--o{ REGISTRATION_GROUP : "leads"
+    REGISTRATION_GROUP ||--o{ REGISTRATION_GROUP_MEMBER : "has members"
+    STUDENT_PROFILE ||--o{ REGISTRATION_GROUP_MEMBER : "joins as"
 
     %% Progress
     TOPIC ||--o{ TASK : "divided into"
     STUDENT_PROFILE ||--o{ TASK : "assigned to"
     TOPIC ||--o{ SUBMISSION : "receives"
-    STUDENT_PROFILE ||--o{ SUBMISSION : "uploads"
+    REGISTRATION_GROUP ||--o{ SUBMISSION : "submits"
 
     %% Council Defense
     COUNCIL ||--o{ COUNCIL_MEMBER : "consists of"
     LECTURER_PROFILE ||--o{ COUNCIL_MEMBER : "acts as"
     COUNCIL ||--o{ COUNCIL_TOPIC : "evaluates"
     TOPIC ||--o| COUNCIL_TOPIC : "is evaluated by"
+    REGISTRATION_GROUP ||--o| COUNCIL_TOPIC : "presents at"
 
     %% Snapshot of Entity Attributes
     DEPARTMENT {
@@ -195,16 +213,25 @@ erDiagram
         int lecturer_id FK
         string status
     }
-    TOPIC_REGISTRATION {
+    REGISTRATION_GROUP {
         int id PK
         int topic_id FK
+        int semester_id FK
+        int leader_id FK
+        string status "FORMING, SUBMITTED, APPROVED, REJECTED"
+        string lecturer_feedback
+    }
+    REGISTRATION_GROUP_MEMBER {
+        int id PK
+        int group_id FK
         int student_id FK
-        string status
+        string status "INVITED, ACCEPTED, DECLINED"
         float mentor_grade
         string mentor_comment
     }
     SUBMISSION {
         int id PK
+        int group_id FK
         string file_url
         string submission_url
         string file_name
