@@ -26,15 +26,12 @@ Yêu cầu chức năng được phân tách rõ ràng theo từng nhóm đối 
   - Chỉ định một Giảng viên mong muốn hướng dẫn hoặc gửi công khai (không chỉ định).
   - Theo dõi trạng thái duyệt đề xuất (Pending, Accepted, Rejected).
   - **Chỉnh sửa và gửi lại (re-submit)** đề xuất sau khi bị GV từ chối kèm nhận xét — trạng thái tự động về lại `PENDING` sau khi SV re-submit.
-- **FR_STU_05 - Quản lý tiến độ (Tasks):**
-  - Xem danh sách các công việc/task do GV giao.
-  - Cập nhật trạng thái công việc (To do, In progress, Done).
 - **FR_STU_06 - Nộp báo cáo / Sản phẩm (Submissions):**
   - Upload file báo cáo (.docx, .pdf) cho các đợt Giữa kỳ và Cuối kỳ.
   - Nộp link GitHub/Drive (`submission_url`) thay cho file tải lên (phục vụ nộp source code).
   - Hỗ trợ nộp nhiều lần (versioning — theo dõi bằng trường `version`) trước khi hết hạn deadline.
 - **FR_STU_07 - Tra cứu kết quả:**
-  - Xem điểm số (Điểm hướng dẫn, Điểm phản biện, Điểm hội đồng).
+  - Xem điểm số cá nhân: Điểm hướng dẫn (`mentor_grade`), Điểm phản biện (`reviewer_grade`), Điểm hội đồng (`council_grade`) — tất cả đều được chấm **riêng theo từng sinh viên**.
   - Xem nhận xét, đánh giá từ giảng viên.
   - Xem lịch trình, địa điểm và thời gian bảo vệ đồ án.
 
@@ -59,17 +56,16 @@ Yêu cầu chức năng được phân tách rõ ràng theo từng nhóm đối 
 - **FR_LEC_03 - Duyệt đăng ký & Đề xuất:**
   - **Duyệt nhóm đăng ký:** Xem danh sách các nhóm đã Submit vào đề tài của mình, xem hồ sơ từng thành viên, chấp nhận (APPROVE) hoặc từ chối (REJECT) cả nhóm kèm lý do.
   - **Duyệt SV đề xuất:** Xem danh sách ý tưởng SV gửi lên, Chấp nhận hướng dẫn (tự động tạo thành đề tài chính thức) hoặc Từ chối kèm lý do phản hồi.
-- **FR_LEC_04 - Hướng dẫn & Theo dõi tiến độ:**
-  - Giao task/nhiệm vụ cho sinh viên.
-  - Xem danh sách **tất cả các phiên bản nộp** (theo trường `version`) của từng SV, tải về hoặc xem từng phiên bản riêng lẻ.
+- **FR_LEC_04 - Theo dõi tiến độ & Báo cáo:**
+  - Xem danh sách **tất cả các phiên bản nộp** (theo trường `version`) của từng nhóm, tải về hoặc xem từng phiên bản riêng lẻ.
   - Viết phản hồi/nhận xét trực tiếp trên từng lần nộp (`lecturer_feedback` trong bảng `submissions`).
 - **FR_LEC_05 - Đánh giá (Chấm điểm hướng dẫn):**
-  - Viết nhận xét tổng kết quá trình làm việc của SV (`mentor_comment` trong bảng `topic_registrations`).
-  - Nhập "Điểm hướng dẫn" (`mentor_grade`).
+  - Viết nhận xét tổng kết quá trình làm việc của từng SV (`mentor_comment` trong bảng `registration_group_members`).
+  - Nhập "Điểm hướng dẫn" riêng cho từng thành viên nhóm (`mentor_grade` trong bảng `registration_group_members`).
   - Điểm chỉ có thể nhập/sửa **trước deadline chốt điểm** (`grade_submission_deadline`) do Admin thiết lập cho từng học kỳ. Sau thời hạn này, điểm bị **khóa** và không thể chỉnh sửa.
 - **FR_LEC_06 - Đánh giá Phản biện / Hội đồng:**
-  - Nếu được phân công làm GV phản biện: Xem báo cáo của đề tài khác và nhập "Điểm phản biện".
-  - Nếu nằm trong hội đồng: Xem danh sách đề tài bảo vệ ở hội đồng của mình, nhập "Điểm hội đồng".
+  - Nếu được phân công làm **GV phản biện** (`reviewer_id` trong `council_topics`): Xem báo cáo của nhóm được phân công, nhập **"Điểm phản biện" riêng cho từng thành viên** (`reviewer_grade` trong bảng `council_topic_grades`).
+  - Nếu nằm trong **hội đồng**: Xem danh sách nhóm bảo vệ trong phiên của mình, nhập **"Điểm hội đồng" riêng cho từng thành viên** (`council_grade` trong bảng `council_topic_grades`).
 
 #### 1.2.1. Nhóm đăng ký (Group Registration)
 
@@ -96,7 +92,8 @@ Yêu cầu chức năng được phân tách rõ ràng theo từng nhóm đối 
 - **FR_ADM_04 - Quản lý Hội đồng bảo vệ (Councils):**
   - Tạo Hội đồng bảo vệ (Tên, ngày giờ, địa điểm).
   - Phân công Giảng viên vào hội đồng (Chủ tịch, Thư ký, Ủy viên...).
-  - Phân bổ danh sách các đề tài vào Hội đồng tương ứng.
+  - Phân bổ danh sách các nhóm đề tài vào Hội đồng tương ứng.
+  - Chỉ định **GV Phản biện** (`reviewer_id`) cho từng đề tài trong hội đồng.
 - **FR_ADM_05 - Báo cáo & Thống kê:**
   - Xuất bảng điểm tổng kết (Excel/PDF).
   - Xem biểu đồ thống kê: Tỷ lệ hoàn thành đồ án, Phân bổ số lượng SV theo từng bộ môn/giảng viên.

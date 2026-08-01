@@ -37,8 +37,8 @@ Hệ thống quản lý đồ án cho sinh viên Công nghệ Thông tin (bao g�
 - **`users`**: `id`, `email`, `password_hash`, `role` (ADMIN, LECTURER, STUDENT), `is_active`, `created_at`, `updated_at`.
 - **`student_profiles`**: `id`, `user_id` (FK), `student_code`, `full_name`, `class`, `major_id` (FK → `majors`), `cohort`, `phone`, `bio`.
   > _(cập nhật: thêm `phone`, `bio`, `major_id` FK thay cho string cứng; hỗ trợ FR_STU_01)_
-- **`lecturer_profiles`**: `id`, `user_id` (FK), `lecturer_code`, `full_name`, `department_id` (FK → `departments`), `academic_title`, `phone`, `bio`, `research_interests`.
-  > _(cập nhật: thêm `phone`, `bio`, `research_interests`, `department_id` FK; hỗ trợ FR_LEC_01)_
+- **`lecturer_profiles`**: `id`, `user_id` (FK), `lecturer_code`, `full_name`, `department_id` (FK → `departments`), `academic_title`, `phone`, `bio`, `research_interests`, `max_mentoring_quota` (Int - Số nhóm tối đa được hướng dẫn trong một học kỳ, Nullable — nếu Null thì không giới hạn).
+  > _(cập nhật: thêm `phone`, `bio`, `research_interests`, `department_id` FK, `max_mentoring_quota`; hỗ trợ FR_LEC_01, FR_ADM_02)_
 
 ### Nhóm 2: Quản lý Danh mục (Master Data)
 
@@ -85,10 +85,10 @@ Hệ thống quản lý đồ án cho sinh viên Công nghệ Thông tin (bao g�
   - `mentor_comment` (Text, Nullable) — Nhận xét của GV hướng dẫn.
   - `joined_at` (DateTime, Nullable) — Thời điểm SV accept lời mời.
 
-### Nhóm 5: Quản lý Tiến độ & Báo cáo (Progress & Submissions)
+### Nhóm 5: Quản lý Báo cáo (Submissions)
 
-- **`tasks`**: Giao việc / Phân công trong nhóm.
-  - `id` (PK), `topic_id` (FK), `title`, `description`, `deadline`, `status` (TODO, IN_PROGRESS, DONE), `assigned_student_id` (FK).
+> _(Bảng `tasks` đã bị loại khỏi scope v1 — tính năng giao việc/task không cần thiết, SV/GV tự quản lý bằng công cụ ngoài.)_
+
 - **`submissions`**: Lịch sử nộp file / báo cáo (nộp theo nhóm).
   - `id` (PK), `topic_id` (FK), `group_id` (FK → `registration_groups` - nhóm nộp bài), `submission_type` (MIDTERM, FINAL, SOURCE_CODE), `file_url` (Nullable - đường dẫn file upload), `submission_url` (Nullable - link GitHub/Drive...), `file_name`, `file_size`, `version` (Int - quản lý số lần nộp lại), `submitted_at`, `lecturer_feedback`.
   > _(cập nhật: đổi `student_id` → `group_id` — nộp bài theo nhóm, không phải cá nhân; hỗ trợ FR_STU_06, FR_LEC_04)_
@@ -97,8 +97,11 @@ Hệ thống quản lý đồ án cho sinh viên Công nghệ Thông tin (bao g�
 
 - **`councils`**: `id`, `name`, `semester_id` (FK), `location`, `defense_date`.
 - **`council_members`**: `id`, `council_id` (FK), `lecturer_id` (FK), `council_role` (PRESIDENT, SECRETARY, REVIEWER, MEMBER).
-- **`council_topics`**: Phân công đề tài cho hội đồng bảo vệ.
-  - `id` (PK), `council_id` (FK), `topic_id` (FK), `time_slot`, `council_grade` (Điểm đánh giá của hội đồng), `reviewer_grade` (Điểm phản biện).
+- **`council_topics`**: Phân công nhóm vào hội đồng bảo vệ.
+  - `id` (PK), `council_id` (FK), `topic_id` (FK), `group_id` (FK → `registration_groups`), `reviewer_id` (FK → `lecturer_profiles` — GV Phản biện phụ trách đề tài này), `time_slot`.
+  > _(cập nhật: thêm `group_id`, `reviewer_id`; tách điểm ra bảng riêng để chấm cá nhân)_
+- **`council_topic_grades`**: Điểm bảo vệ riêng cho từng sinh viên trong nhóm. _(bảng mới)_
+  - `id` (PK), `council_topic_id` (FK → `council_topics`), `student_id` (FK → `student_profiles`), `council_grade` (Float, Nullable — Điểm Hội đồng), `reviewer_grade` (Float, Nullable — Điểm Phản biện).
 
 ### Nhóm 7: Thông báo hệ thống (Notifications)
 
@@ -149,9 +152,7 @@ erDiagram
     REGISTRATION_GROUP ||--o{ REGISTRATION_GROUP_MEMBER : "has members"
     STUDENT_PROFILE ||--o{ REGISTRATION_GROUP_MEMBER : "joins as"
 
-    %% Progress
-    TOPIC ||--o{ TASK : "divided into"
-    STUDENT_PROFILE ||--o{ TASK : "assigned to"
+    %% Submissions
     TOPIC ||--o{ SUBMISSION : "receives"
     REGISTRATION_GROUP ||--o{ SUBMISSION : "submits"
 
@@ -161,6 +162,9 @@ erDiagram
     COUNCIL ||--o{ COUNCIL_TOPIC : "evaluates"
     TOPIC ||--o| COUNCIL_TOPIC : "is evaluated by"
     REGISTRATION_GROUP ||--o| COUNCIL_TOPIC : "presents at"
+    LECTURER_PROFILE ||--o{ COUNCIL_TOPIC : "reviews"
+    COUNCIL_TOPIC ||--o{ COUNCIL_TOPIC_GRADE : "grades per student"
+    STUDENT_PROFILE ||--o{ COUNCIL_TOPIC_GRADE : "receives grade"
 
     %% Snapshot of Entity Attributes
     DEPARTMENT {
@@ -189,6 +193,7 @@ erDiagram
         string phone
         string bio
         string research_interests
+        int max_mentoring_quota
     }
     SEMESTER {
         int id PK
@@ -241,6 +246,16 @@ erDiagram
     }
     COUNCIL_TOPIC {
         int id PK
+        int council_id FK
+        int topic_id FK
+        int group_id FK
+        int reviewer_id FK
+        string time_slot
+    }
+    COUNCIL_TOPIC_GRADE {
+        int id PK
+        int council_topic_id FK
+        int student_id FK
         float council_grade
         float reviewer_grade
     }
