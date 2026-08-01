@@ -1,0 +1,229 @@
+# Phân tích Thiết kế Cơ sở dữ liệu: Hệ thống Quản lý Đồ án CNTT
+
+Hệ thống quản lý đồ án cho sinh viên Công nghệ Thông tin (bao gồm Đồ án cơ sở, Đồ án chuyên ngành, Đồ án tốt nghiệp) là một hệ thống mang tính học thuật, yêu cầu quy trình chặt chẽ từ khâu ra đề, đăng ký, thực hiện, báo cáo đến chấm điểm.
+
+---
+
+## 1. Phân tích Các Tính Năng Cốt Lõi (Dựa trên Role)
+
+### 🧑‍🎓 Sinh viên (Student)
+
+- **Quản lý đồ án**: Xem danh sách các đề tài đang mở, xem chi tiết đề tài.
+- **Đăng ký**: Đăng ký đề tài (cá nhân hoặc theo nhóm).
+- **Đề xuất đề tài**: Sinh viên tự đề xuất đề tài dựa trên ý tưởng cá nhân, gửi yêu cầu cho giảng viên mong muốn hướng dẫn.
+- **Thực hiện**: Quản lý tiến độ, task list, nộp báo cáo định kỳ/cuối kỳ (hỗ trợ nộp nhiều lần), nộp source code.
+- **Kết quả**: Xem nhận xét của giảng viên, xem điểm, lịch bảo vệ hội đồng.
+
+### 👨‍🏫 Giảng viên (Lecturer)
+
+- **Quản lý đề tài**: Đề xuất đề tài mới, duyệt/từ chối sinh viên đăng ký vào đề tài của mình.
+- **Duyệt đề xuất của Sinh viên**: Xem xét các đề tài do sinh viên tự đề xuất, chấp nhận làm giảng viên hướng dẫn hoặc từ chối kèm lý do.
+- **Hướng dẫn**: Giao task, theo dõi tiến độ của sinh viên, tải và xem báo cáo các phiên bản.
+- **Đánh giá**: Chấm điểm quá trình, nhận xét, chấm điểm phản biện/hội đồng.
+
+### 👨‍💻 Quản trị viên (Admin)
+
+- **Quản lý hệ thống**: Quản lý tài khoản, cấp quyền.
+- **Quản lý danh mục**: Quản lý đợt/học kỳ, loại đồ án (Cơ sở, Chuyên ngành, Tốt nghiệp), bộ môn, chuyên ngành.
+- **Quản lý quy trình**: Mở/đóng đợt đăng ký, duyệt đề tài của giảng viên (nếu cần), phân công hội đồng bảo vệ.
+- **Báo cáo & Thống kê**: Thống kê số lượng sinh viên làm đồ án, tỉ lệ qua/trượt, danh sách điểm.
+
+---
+
+## 2. Thiết kế Cấu trúc Database
+
+### Nhóm 1: Quản lý Người dùng & Phân quyền (Authentication & Profiles)
+
+- **`users`**: `id`, `email`, `password_hash`, `role` (ADMIN, LECTURER, STUDENT), `is_active`, `created_at`, `updated_at`.
+- **`student_profiles`**: `id`, `user_id` (FK), `student_code`, `full_name`, `class`, `major_id` (FK → `majors`), `cohort`, `phone`, `bio`.
+  > _(cập nhật: thêm `phone`, `bio`, `major_id` FK thay cho string cứng; hỗ trợ FR_STU_01)_
+- **`lecturer_profiles`**: `id`, `user_id` (FK), `lecturer_code`, `full_name`, `department_id` (FK → `departments`), `academic_title`, `phone`, `bio`, `research_interests`.
+  > _(cập nhật: thêm `phone`, `bio`, `research_interests`, `department_id` FK; hỗ trợ FR_LEC_01)_
+
+### Nhóm 2: Quản lý Danh mục (Master Data)
+
+- **`semesters`**: `id`, `name`, `code`, `start_date`, `end_date`, `registration_start` (Thời điểm mở đăng ký), `registration_end` (Thời điểm đóng đăng ký), `grade_submission_deadline` (Deadline chốt điểm — sau mốc này điểm bị khóa), `is_active`.
+  > _(cập nhật: thêm `registration_start`, `registration_end`; hỗ trợ FR_ADM_03)_
+- **`project_types`**: `id`, `name`, `code`.
+- **`departments`**: `id`, `name`, `code`. — _(bảng mới: tách riêng Khoa/Bộ môn; hỗ trợ FR_ADM_02)_
+- **`majors`**: `id`, `name`, `code`, `department_id` (FK). — _(bảng mới: tách riêng Chuyên ngành; hỗ trợ FR_ADM_02)_
+
+### Nhóm 3: Đề xuất Đề tài (Tính năng Sinh viên tự đề xuất)
+
+Để giữ cho bảng đề tài chính thức được "sạch", chúng ta tách riêng các ý tưởng/đề xuất của sinh viên sang một bảng độc lập. Quá trình này như một bước "thương lượng".
+
+- **`topic_proposals`**: Sinh viên đề xuất đề tài.
+  - `id` (PK)
+  - `semester_id` (FK) — Đề xuất thuộc học kỳ nào.
+  - `student_id` (FK) — Người đề xuất.
+  - `title`, `description`, `expected_outcomes`
+  - `project_type_id` (FK)
+  - `requested_lecturer_id` (FK - Nullable) — GV mà sinh viên mong muốn hướng dẫn (nếu để trống, GV nào trong khoa cũng có thể nhận).
+  - `accepted_by_lecturer_id` (FK - Nullable) — GV chính thức duyệt và nhận hướng dẫn.
+  - `status` (PENDING, ACCEPTED, REJECTED)
+  - `lecturer_feedback` — Nhận xét của GV khi từ chối.
+  - _Luồng xử lý_: Khi GV duyệt (`ACCEPTED`), hệ thống sẽ **tự động copy** dữ liệu tạo thành 1 record trong `topics` và tự động tạo record đăng ký trong `topic_registrations` cho sinh viên đó.
+
+### Nhóm 4: Quản lý Đề tài & Đăng ký (Topics & Registration)
+
+- **`topics`**: Danh sách đề tài chính thức (được GV đề xuất hoặc GV đã duyệt từ đề xuất của SV).
+  - `id` (PK), `title`, `description`, `expected_outcomes`, `project_type_id` (FK), `semester_id` (FK), `lecturer_id` (FK - GV Hướng dẫn), `max_students`, `status` (PENDING, APPROVED, OPEN, IN_PROGRESS, COMPLETED), `source_proposal_id` (FK - Nullable, liên kết ngược lại đề xuất gốc nếu có).
+- **`topic_registrations`**: Đăng ký làm đề tài.
+  - `id` (PK), `topic_id` (FK), `student_id` (FK), `status` (REGISTERED, APPROVED, REJECTED), `mentor_grade` (Điểm hướng dẫn), `mentor_comment` (Nhận xét hướng dẫn).
+
+### Nhóm 5: Quản lý Tiến độ & Báo cáo (Progress & Submissions)
+
+- **`tasks`**: Giao việc / Phân công trong nhóm.
+  - `id` (PK), `topic_id` (FK), `title`, `description`, `deadline`, `status` (TODO, IN_PROGRESS, DONE), `assigned_student_id` (FK).
+- **`submissions`**: Lịch sử nộp file / báo cáo.
+  - `id` (PK), `topic_id` (FK), `student_id` (FK), `submission_type` (MIDTERM, FINAL, SOURCE_CODE), `file_url` (Nullable - đường dẫn file upload), `submission_url` (Nullable - link GitHub/Drive...), `file_name`, `file_size`, `version` (Int - quản lý số lần nộp lại), `submitted_at`, `lecturer_feedback`.
+  > _(cập nhật: tách `file_url` và `submission_url`, thêm `file_name`, `file_size`, `mentor_comment`; hỗ trợ FR_STU_06, FR_LEC_04)_
+
+### Nhóm 6: Hội đồng bảo vệ (Councils)
+
+- **`councils`**: `id`, `name`, `semester_id` (FK), `location`, `defense_date`.
+- **`council_members`**: `id`, `council_id` (FK), `lecturer_id` (FK), `council_role` (PRESIDENT, SECRETARY, REVIEWER, MEMBER).
+- **`council_topics`**: Phân công đề tài cho hội đồng bảo vệ.
+  - `id` (PK), `council_id` (FK), `topic_id` (FK), `time_slot`, `council_grade` (Điểm đánh giá của hội đồng), `reviewer_grade` (Điểm phản biện).
+
+### Nhóm 7: Thông báo hệ thống (Notifications)
+
+- **`notifications`**: Thông báo trạng thái (GV duyệt đề tài, báo cáo có nhận xét mới, deadline sắp tới...).
+  - `id` (PK), `user_id` (FK), `title`, `content`, `is_read`, `created_at`.
+
+### Nhóm 8: Audit Log (Lịch sử thao tác nhạy cảm)
+
+_(bảng mới: hỗ trợ NFR - Maintainability, yêu cầu ghi log các hành động nhạy cảm)_
+
+- **`audit_logs`**: Ghi lại mọi hành động quan trọng của Admin và GV.
+  - `id` (PK), `user_id` (FK - Ai thực hiện), `action` (Tên hành động: UPDATE_GRADE, DELETE_TOPIC...), `target_table` (Bảng bị tác động), `target_id` (ID của bản ghi bị tác động), `old_value` (JSON - Giá trị cũ), `new_value` (JSON - Giá trị mới), `created_at`.
+
+---
+
+## 3. Sơ đồ Thực thể Liên kết (ER Diagram)
+
+```mermaid
+erDiagram
+    %% Auth & Profiles
+    USER ||--o| STUDENT_PROFILE : "has"
+    USER ||--o| LECTURER_PROFILE : "has"
+    USER ||--o{ NOTIFICATION : "receives"
+    USER ||--o{ AUDIT_LOG : "performs"
+
+    %% Master Data (Departments & Majors)
+    DEPARTMENT ||--o{ MAJOR : "has"
+    DEPARTMENT ||--o{ LECTURER_PROFILE : "belongs to"
+    MAJOR ||--o{ STUDENT_PROFILE : "belongs to"
+
+    %% Categories
+    SEMESTER ||--o{ TOPIC : "contains"
+    SEMESTER ||--o{ TOPIC_PROPOSAL : "contains"
+    SEMESTER ||--o{ COUNCIL : "has"
+    PROJECT_TYPE ||--o{ TOPIC : "categorizes"
+    PROJECT_TYPE ||--o{ TOPIC_PROPOSAL : "categorizes"
+
+    %% Proposals (Student proposes topic)
+    STUDENT_PROFILE ||--o{ TOPIC_PROPOSAL : "proposes"
+    LECTURER_PROFILE ||--o{ TOPIC_PROPOSAL : "requests/accepts"
+    TOPIC_PROPOSAL ||--o| TOPIC : "converted to (when accepted)"
+
+    %% Core Project Flow
+    LECTURER_PROFILE ||--o{ TOPIC : "proposes/mentors"
+    TOPIC ||--o{ TOPIC_REGISTRATION : "has"
+    STUDENT_PROFILE ||--o{ TOPIC_REGISTRATION : "registers"
+
+    %% Progress
+    TOPIC ||--o{ TASK : "divided into"
+    STUDENT_PROFILE ||--o{ TASK : "assigned to"
+    TOPIC ||--o{ SUBMISSION : "receives"
+    STUDENT_PROFILE ||--o{ SUBMISSION : "uploads"
+
+    %% Council Defense
+    COUNCIL ||--o{ COUNCIL_MEMBER : "consists of"
+    LECTURER_PROFILE ||--o{ COUNCIL_MEMBER : "acts as"
+    COUNCIL ||--o{ COUNCIL_TOPIC : "evaluates"
+    TOPIC ||--o| COUNCIL_TOPIC : "is evaluated by"
+
+    %% Snapshot of Entity Attributes
+    DEPARTMENT {
+        int id PK
+        string name
+        string code
+    }
+    MAJOR {
+        int id PK
+        int department_id FK
+        string name
+        string code
+    }
+    STUDENT_PROFILE {
+        int id PK
+        int user_id FK
+        int major_id FK
+        string student_code
+        string phone
+        string bio
+    }
+    LECTURER_PROFILE {
+        int id PK
+        int user_id FK
+        int department_id FK
+        string phone
+        string bio
+        string research_interests
+    }
+    SEMESTER {
+        int id PK
+        string name
+        date registration_start
+        date registration_end
+        date grade_submission_deadline
+        date start_date
+        date end_date
+    }
+    TOPIC_PROPOSAL {
+        int id PK
+        int semester_id FK
+        int student_id FK
+        int requested_lecturer_id FK
+        int accepted_by_lecturer_id FK
+        string status "PENDING, ACCEPTED, REJECTED"
+    }
+    TOPIC {
+        int id PK
+        int source_proposal_id FK
+        int lecturer_id FK
+        string status
+    }
+    TOPIC_REGISTRATION {
+        int id PK
+        int topic_id FK
+        int student_id FK
+        string status
+        float mentor_grade
+        string mentor_comment
+    }
+    SUBMISSION {
+        int id PK
+        string file_url
+        string submission_url
+        string file_name
+        int file_size
+        int version
+        string submission_type
+    }
+    COUNCIL_TOPIC {
+        int id PK
+        float council_grade
+        float reviewer_grade
+    }
+    AUDIT_LOG {
+        int id PK
+        int user_id FK
+        string action
+        string target_table
+        int target_id
+        json old_value
+        json new_value
+    }
+```
