@@ -130,3 +130,65 @@ model LecturerProfile {
 
   @@map("lecturer_profiles")
 }
+
+// ─────────────────────────────────────────────────────────
+// GROUP 2: MASTER DATA
+// ─────────────────────────────────────────────────────────
+
+model Department {
+  id   Int    @id @default(autoincrement())
+  name String
+  code String @unique
+
+  // Relations
+  majors   Major[]
+  lecturers LecturerProfile[]
+
+  @@map("departments")
+}
+
+model Major {
+  id           Int    @id @default(autoincrement())
+  departmentId Int
+  name         String
+  code         String @unique
+
+  // Relations
+  department Department       @relation(fields: [departmentId], references: [id], onDelete: Restrict)
+  students   StudentProfile[]
+
+  @@map("majors")
+}
+
+model Semester {
+  id                      Int       @id @default(autoincrement())
+  name                    String
+  code                    String    @unique
+  startDate               DateTime
+  endDate                 DateTime
+  registrationStart       DateTime  // Window opens for topic registration
+  registrationEnd         DateTime  // Window closes for topic registration
+  gradeSubmissionDeadline DateTime? // After this, grades are locked
+  isActive                Boolean   @default(false)
+
+  // Relations
+  topics             Topic[]
+  topicProposals     TopicProposal[]
+  registrationGroups RegistrationGroup[]
+  councils           Council[]
+
+  @@map("semesters")
+}
+
+model ProjectType {
+  id   Int    @id @default(autoincrement())
+  name String
+  code String @unique
+
+  // Relations
+  topics         Topic[]
+  topicProposals TopicProposal[]
+
+  @@map("project_types")
+}
+
