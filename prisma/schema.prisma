@@ -224,4 +224,77 @@ model TopicProposal {
   @@map("topic_proposals")
 }
 
+// ─────────────────────────────────────────────────────────
+// GROUP 4: TOPICS & REGISTRATION
+// ─────────────────────────────────────────────────────────
+
+model Topic {
+  id               Int         @id @default(autoincrement())
+  semesterId       Int
+  lecturerId       Int
+  projectTypeId    Int
+  sourceProposalId Int?        @unique // Set only if topic originated from a student proposal
+  title            String
+  description      String      @db.Text
+  expectedOutcomes String      @db.Text
+  maxStudents      Int         @default(1)
+  status           TopicStatus @default(PENDING)
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
+
+  // Relations
+  semester       Semester        @relation(fields: [semesterId], references: [id], onDelete: Restrict)
+  lecturer       LecturerProfile @relation(fields: [lecturerId], references: [id], onDelete: Restrict)
+  projectType    ProjectType     @relation(fields: [projectTypeId], references: [id], onDelete: Restrict)
+  sourceProposal TopicProposal?  @relation(fields: [sourceProposalId], references: [id], onDelete: SetNull)
+
+  registrationGroups RegistrationGroup[]
+  submissions        Submission[]
+  councilTopic       CouncilTopic?
+
+  @@map("topics")
+}
+
+model RegistrationGroup {
+  id              Int                     @id @default(autoincrement())
+  topicId         Int
+  semesterId      Int
+  leaderId        Int                     // FK → StudentProfile
+  name            String?
+  status          RegistrationGroupStatus @default(FORMING)
+  lecturerFeedback String?                @db.Text
+  createdAt       DateTime                @default(now())
+  updatedAt       DateTime                @updatedAt
+
+  // Relations
+  topic     Topic          @relation(fields: [topicId], references: [id], onDelete: Restrict)
+  semester  Semester       @relation(fields: [semesterId], references: [id], onDelete: Restrict)
+  leader    StudentProfile @relation(fields: [leaderId], references: [id], onDelete: Restrict)
+
+  members      RegistrationGroupMember[]
+  submissions  Submission[]
+  councilTopic CouncilTopic?
+
+  @@map("registration_groups")
+}
+
+model RegistrationGroupMember {
+  id           Int               @id @default(autoincrement())
+  groupId      Int
+  studentId    Int
+  status       GroupMemberStatus @default(INVITED)
+  mentorGrade  Float?            // Per-student grade from supervising lecturer
+  mentorComment String?          @db.Text
+  joinedAt     DateTime?         // Set when member accepts the invitation
+  createdAt    DateTime          @default(now())
+
+  // Relations
+  group   RegistrationGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  student StudentProfile    @relation(fields: [studentId], references: [id], onDelete: Restrict)
+
+  @@unique([groupId, studentId])
+  @@map("registration_group_members")
+}
+
+
 
