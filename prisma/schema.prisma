@@ -296,5 +296,26 @@ model RegistrationGroupMember {
   @@map("registration_group_members")
 }
 
+// ─────────────────────────────────────────────────────────
+// GROUP 5: SUBMISSIONS
+// ─────────────────────────────────────────────────────────
 
+model Submission {
+  id              Int            @id @default(autoincrement())
+  topicId         Int
+  groupId         Int
+  submissionType  SubmissionType
+  fileUrl         String?        // Cloud storage path (S3, GCS, etc.)
+  submissionUrl   String?        // External link (GitHub, Google Drive, etc.)
+  fileName        String?
+  fileSize        Int?           // Bytes
+  version         Int            @default(1) // Incremented on each re-submission
+  lecturerFeedback String?       @db.Text
+  submittedAt     DateTime       @default(now())
 
+  // Relations
+  topic Topic             @relation(fields: [topicId], references: [id], onDelete: Restrict)
+  group RegistrationGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  @@map("submissions")
+}
