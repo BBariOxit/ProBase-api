@@ -60,3 +60,73 @@ enum CouncilMemberRole {
   REVIEWER
   MEMBER
 }
+
+// ─────────────────────────────────────────────────────────
+// GROUP 1: AUTHENTICATION & PROFILES
+// ─────────────────────────────────────────────────────────
+
+model User {
+  id        Int      @id @default(autoincrement())
+  email     String   @unique
+  password  String   // Bcrypt / Argon2 hash — never store plaintext
+  role      Role
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  studentProfile  StudentProfile?
+  lecturerProfile LecturerProfile?
+  notifications   Notification[]
+  auditLogs       AuditLog[]
+
+  @@map("users")
+}
+
+model StudentProfile {
+  id          Int     @id @default(autoincrement())
+  userId      Int     @unique
+  majorId     Int?
+  studentCode String  @unique
+  fullName    String
+  class       String?
+  cohort      String? // e.g. "2021"
+  phone       String?
+  bio         String?
+
+  // Relations
+  user  User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  major Major? @relation(fields: [majorId], references: [id], onDelete: SetNull)
+
+  proposedTopics TopicProposal[] @relation("ProposalStudent")
+  groupsLed      RegistrationGroup[]
+  groupMemberships RegistrationGroupMember[]
+  councilGrades  CouncilTopicGrade[]
+
+  @@map("student_profiles")
+}
+
+model LecturerProfile {
+  id               Int     @id @default(autoincrement())
+  userId           Int     @unique
+  departmentId     Int?
+  lecturerCode     String  @unique
+  fullName         String
+  academicTitle    String?
+  phone            String?
+  bio              String?
+  researchInterests String?
+  maxMentoringQuota Int?   // Null = no limit
+
+  // Relations
+  user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  department Department? @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+
+  requestedProposals TopicProposal[] @relation("ProposalRequestedLecturer")
+  acceptedProposals  TopicProposal[] @relation("ProposalAcceptedLecturer")
+  topics             Topic[]
+  councilMembers     CouncilMember[]
+  reviewedTopics     CouncilTopic[]
+
+  @@map("lecturer_profiles")
+}
