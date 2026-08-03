@@ -192,3 +192,36 @@ model ProjectType {
   @@map("project_types")
 }
 
+// ─────────────────────────────────────────────────────────
+// GROUP 3: TOPIC PROPOSALS (Student-initiated)
+// ─────────────────────────────────────────────────────────
+
+model TopicProposal {
+  id                    Int                 @id @default(autoincrement())
+  semesterId            Int
+  studentId             Int
+  projectTypeId         Int
+  title                 String
+  description           String              @db.Text
+  expectedOutcomes      String              @db.Text
+  requestedLecturerId   Int?                // Nullable — student may leave open
+  acceptedByLecturerId  Int?                // Set when a lecturer approves
+  status                TopicProposalStatus @default(PENDING)
+  lecturerFeedback      String?             @db.Text
+  createdAt             DateTime            @default(now())
+  updatedAt             DateTime            @updatedAt
+
+  // Relations
+  semester           Semester        @relation(fields: [semesterId], references: [id], onDelete: Restrict)
+  student            StudentProfile  @relation("ProposalStudent", fields: [studentId], references: [id], onDelete: Cascade)
+  projectType        ProjectType     @relation(fields: [projectTypeId], references: [id], onDelete: Restrict)
+  requestedLecturer  LecturerProfile? @relation("ProposalRequestedLecturer", fields: [requestedLecturerId], references: [id], onDelete: SetNull)
+  acceptedByLecturer LecturerProfile? @relation("ProposalAcceptedLecturer", fields: [acceptedByLecturerId], references: [id], onDelete: SetNull)
+
+  // Back-link to the official topic created from this proposal
+  convertedTopic Topic?
+
+  @@map("topic_proposals")
+}
+
+
