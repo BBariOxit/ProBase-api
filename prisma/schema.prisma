@@ -388,3 +388,42 @@ model CouncilTopicGrade {
   @@map("council_topic_grades")
 }
 
+// ─────────────────────────────────────────────────────────
+// GROUP 7: NOTIFICATIONS
+// ─────────────────────────────────────────────────────────
+
+model Notification {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  title     String
+  content   String   @db.Text
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  // Relations
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("notifications")
+}
+
+// ─────────────────────────────────────────────────────────
+// GROUP 8: AUDIT LOGS
+// ─────────────────────────────────────────────────────────
+
+model AuditLog {
+  id          Int      @id @default(autoincrement())
+  userId      Int
+  action      String   // e.g. UPDATE_GRADE, DELETE_TOPIC, LOCK_ACCOUNT
+  targetTable String   // Table name affected
+  targetId    String   // Stringified PK of the affected record
+  oldValue    Json?    // Snapshot before the change
+  newValue    Json?    // Snapshot after the change
+  createdAt   DateTime @default(now())
+
+  // Relations
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@map("audit_logs")
+}
+
+
