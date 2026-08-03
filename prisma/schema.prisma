@@ -319,3 +319,72 @@ model Submission {
 
   @@map("submissions")
 }
+
+// ─────────────────────────────────────────────────────────
+// GROUP 6: DEFENSE COUNCILS
+// ─────────────────────────────────────────────────────────
+
+model Council {
+  id         Int      @id @default(autoincrement())
+  semesterId Int
+  name       String
+  location   String?
+  defenseDate DateTime
+  createdAt  DateTime @default(now())
+
+  // Relations
+  semester Semester        @relation(fields: [semesterId], references: [id], onDelete: Restrict)
+  members  CouncilMember[]
+  topics   CouncilTopic[]
+
+  @@map("councils")
+}
+
+model CouncilMember {
+  id          Int               @id @default(autoincrement())
+  councilId   Int
+  lecturerId  Int
+  councilRole CouncilMemberRole
+
+  // Relations
+  council  Council         @relation(fields: [councilId], references: [id], onDelete: Cascade)
+  lecturer LecturerProfile @relation(fields: [lecturerId], references: [id], onDelete: Restrict)
+
+  @@unique([councilId, lecturerId])
+  @@map("council_members")
+}
+
+model CouncilTopic {
+  id         Int       @id @default(autoincrement())
+  councilId  Int
+  topicId    Int       @unique // Each topic is defended in exactly one council session
+  groupId    Int       @unique // Each group presents in exactly one council session
+  reviewerId Int       // Assigned reviewer (GV Phản biện)
+  timeSlot   String?
+
+  // Relations
+  council  Council         @relation(fields: [councilId], references: [id], onDelete: Cascade)
+  topic    Topic           @relation(fields: [topicId], references: [id], onDelete: Restrict)
+  group    RegistrationGroup @relation(fields: [groupId], references: [id], onDelete: Restrict)
+  reviewer LecturerProfile @relation(fields: [reviewerId], references: [id], onDelete: Restrict)
+
+  grades CouncilTopicGrade[]
+
+  @@map("council_topics")
+}
+
+model CouncilTopicGrade {
+  id             Int    @id @default(autoincrement())
+  councilTopicId Int
+  studentId      Int
+  councilGrade   Float? // Grade from the full council panel
+  reviewerGrade  Float? // Grade from the assigned reviewer
+
+  // Relations
+  councilTopic CouncilTopic   @relation(fields: [councilTopicId], references: [id], onDelete: Cascade)
+  student      StudentProfile @relation(fields: [studentId], references: [id], onDelete: Restrict)
+
+  @@unique([councilTopicId, studentId])
+  @@map("council_topic_grades")
+}
+
