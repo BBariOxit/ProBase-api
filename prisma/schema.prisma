@@ -1,7 +1,5 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Get a free hosted Postgres database in seconds: `npx create-db`
+// This is your Prisma schema file
+// Docs: https://pris.ly/d/prisma-schema
 
 generator client {
   provider = "prisma-client"
@@ -11,3 +9,420 @@ generator client {
 datasource db {
   provider = "postgresql"
 }
+
+// ─────────────────────────────────────────────────────────
+// ENUMS
+// ─────────────────────────────────────────────────────────
+
+enum Role {
+  ADMIN
+  LECTURER
+  STUDENT
+}
+
+enum TopicProposalStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+}
+
+enum TopicStatus {
+  PENDING
+  APPROVED
+  OPEN
+  IN_PROGRESS
+  COMPLETED
+}
+
+enum RegistrationGroupStatus {
+  FORMING
+  SUBMITTED
+  APPROVED
+  REJECTED
+}
+
+enum GroupMemberStatus {
+  INVITED
+  ACCEPTED
+  DECLINED
+}
+
+enum SubmissionType {
+  MIDTERM
+  FINAL
+  SOURCE_CODE
+}
+
+enum CouncilMemberRole {
+  PRESIDENT
+  SECRETARY
+  REVIEWER
+  MEMBER
+}
+
+// ─────────────────────────────────────────────────────────
+// GROUP 1: AUTHENTICATION & PROFILES
+// ─────────────────────────────────────────────────────────
+
+model User {
+  id        Int      @id @default(autoincrement())
+  email     String   @unique
+  password  String   // Bcrypt / Argon2 hash — never store plaintext
+  role      Role
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  studentProfile  StudentProfile?
+  lecturerProfile LecturerProfile?
+  notifications   Notification[]
+  auditLogs       AuditLog[]
+
+  @@map("users")
+}
+
+model StudentProfile {
+  id          Int     @id @default(autoincrement())
+  userId      Int     @unique
+  majorId     Int?
+  studentCode String  @unique
+  fullName    String
+  class       String?
+  cohort      String? // e.g. "2021"
+  phone       String?
+  bio         String?
+
+  // Relations
+  user  User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  major Major? @relation(fields: [majorId], references: [id], onDelete: SetNull)
+
+  proposedTopics TopicProposal[] @relation("ProposalStudent")
+  groupsLed      RegistrationGroup[]
+  groupMemberships RegistrationGroupMember[]
+  councilGrades  CouncilTopicGrade[]
+
+  @@map("student_profiles")
+}
+
+model LecturerProfile {
+  id               Int     @id @default(autoincrement())
+  userId           Int     @unique
+  departmentId     Int?
+  lecturerCode     String  @unique
+  fullName         String
+  academicTitle    String?
+  phone            String?
+  bio              String?
+  researchInterests String?
+  maxMentoringQuota Int?   // Null = no limit
+
+  // Relations
+  user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  department Department? @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+
+  requestedProposals TopicProposal[] @relation("ProposalRequestedLecturer")
+  acceptedProposals  TopicProposal[] @relation("ProposalAcceptedLecturer")
+  topics             Topic[]
+  councilMembers     CouncilMember[]
+  reviewedTopics     CouncilTopic[]
+
+  @@map("lecturer_profiles")
+}
+
+// ─────────────────────────────────────────────────────────
+// GROUP 2: MASTER DATA
+// ─────────────────────────────────────────────────────────
+
+model Department {
+  id   Int    @id @default(autoincrement())
+  name String
+  code String @unique
+
+  // Relations
+  majors   Major[]
+  lecturers LecturerProfile[]
+
+  @@map("departments")
+}
+
+model Major {
+  id           Int    @id @default(autoincrement())
+  departmentId Int
+  name         String
+  code         String @unique
+
+  // Relations
+  department Department       @relation(fields: [departmentId], references: [id], onDelete: Restrict)
+  students   StudentProfile[]
+
+  @@map("majors")
+}
+
+model Semester {
+  id                      Int       @id @default(autoincrement())
+  name                    String
+  code                    String    @unique
+  startDate               DateTime
+  endDate                 DateTime
+  registrationStart       DateTime  // Window opens for topic registration
+  registrationEnd         DateTime  // Window closes for topic registration
+  gradeSubmissionDeadline DateTime? // After this, grades are locked
+  isActive                Boolean   @default(false)
+
+  // Relations
+  topics             Topic[]
+  topicProposals     TopicProposal[]
+  registrationGroups RegistrationGroup[]
+  councils           Council[]
+
+  @@map("semesters")
+}
+
+model ProjectType {
+  id   Int    @id @default(autoincrement())
+  name String
+  code String @unique
+
+  // Relations
+  topics         Topic[]
+  topicProposals TopicProposal[]
+
+  @@map("project_types")
+}
+
+// ─────────────────────────────────────────────────────────
+// GROUP 3: TOPIC PROPOSALS (Student-initiated)
+// ─────────────────────────────────────────────────────────
+
+model TopicProposal {
+  id                    Int                 @id @default(autoincrement())
+  semesterId            Int
+  studentId             Int
+  projectTypeId         Int
+  title                 String
+  description           String              @db.Text
+  expectedOutcomes      String              @db.Text
+  requestedLecturerId   Int?                // Nullable — student may leave open
+  acceptedByLecturerId  Int?                // Set when a lecturer approves
+  status                TopicProposalStatus @default(PENDING)
+  lecturerFeedback      String?             @db.Text
+  createdAt             DateTime            @default(now())
+  updatedAt             DateTime            @updatedAt
+
+  // Relations
+  semester           Semester        @relation(fields: [semesterId], references: [id], onDelete: Restrict)
+  student            StudentProfile  @relation("ProposalStudent", fields: [studentId], references: [id], onDelete: Cascade)
+  projectType        ProjectType     @relation(fields: [projectTypeId], references: [id], onDelete: Restrict)
+  requestedLecturer  LecturerProfile? @relation("ProposalRequestedLecturer", fields: [requestedLecturerId], references: [id], onDelete: SetNull)
+  acceptedByLecturer LecturerProfile? @relation("ProposalAcceptedLecturer", fields: [acceptedByLecturerId], references: [id], onDelete: SetNull)
+
+  // Back-link to the official topic created from this proposal
+  convertedTopic Topic?
+
+  @@map("topic_proposals")
+}
+
+// ─────────────────────────────────────────────────────────
+// GROUP 4: TOPICS & REGISTRATION
+// ─────────────────────────────────────────────────────────
+
+model Topic {
+  id               Int         @id @default(autoincrement())
+  semesterId       Int
+  lecturerId       Int
+  projectTypeId    Int
+  sourceProposalId Int?        @unique // Set only if topic originated from a student proposal
+  title            String
+  description      String      @db.Text
+  expectedOutcomes String      @db.Text
+  maxStudents      Int         @default(1)
+  status           TopicStatus @default(PENDING)
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
+
+  // Relations
+  semester       Semester        @relation(fields: [semesterId], references: [id], onDelete: Restrict)
+  lecturer       LecturerProfile @relation(fields: [lecturerId], references: [id], onDelete: Restrict)
+  projectType    ProjectType     @relation(fields: [projectTypeId], references: [id], onDelete: Restrict)
+  sourceProposal TopicProposal?  @relation(fields: [sourceProposalId], references: [id], onDelete: SetNull)
+
+  registrationGroups RegistrationGroup[]
+  submissions        Submission[]
+  councilTopic       CouncilTopic?
+
+  @@map("topics")
+}
+
+model RegistrationGroup {
+  id              Int                     @id @default(autoincrement())
+  topicId         Int
+  semesterId      Int
+  leaderId        Int                     // FK → StudentProfile
+  name            String?
+  status          RegistrationGroupStatus @default(FORMING)
+  lecturerFeedback String?                @db.Text
+  createdAt       DateTime                @default(now())
+  updatedAt       DateTime                @updatedAt
+
+  // Relations
+  topic     Topic          @relation(fields: [topicId], references: [id], onDelete: Restrict)
+  semester  Semester       @relation(fields: [semesterId], references: [id], onDelete: Restrict)
+  leader    StudentProfile @relation(fields: [leaderId], references: [id], onDelete: Restrict)
+
+  members      RegistrationGroupMember[]
+  submissions  Submission[]
+  councilTopic CouncilTopic?
+
+  @@map("registration_groups")
+}
+
+model RegistrationGroupMember {
+  id           Int               @id @default(autoincrement())
+  groupId      Int
+  studentId    Int
+  status       GroupMemberStatus @default(INVITED)
+  mentorGrade  Float?            // Per-student grade from supervising lecturer
+  mentorComment String?          @db.Text
+  joinedAt     DateTime?         // Set when member accepts the invitation
+  createdAt    DateTime          @default(now())
+
+  // Relations
+  group   RegistrationGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  student StudentProfile    @relation(fields: [studentId], references: [id], onDelete: Restrict)
+
+  @@unique([groupId, studentId])
+  @@map("registration_group_members")
+}
+
+// ─────────────────────────────────────────────────────────
+// GROUP 5: SUBMISSIONS
+// ─────────────────────────────────────────────────────────
+
+model Submission {
+  id              Int            @id @default(autoincrement())
+  topicId         Int
+  groupId         Int
+  submissionType  SubmissionType
+  fileUrl         String?        // Cloud storage path (S3, GCS, etc.)
+  submissionUrl   String?        // External link (GitHub, Google Drive, etc.)
+  fileName        String?
+  fileSize        Int?           // Bytes
+  version         Int            @default(1) // Incremented on each re-submission
+  lecturerFeedback String?       @db.Text
+  submittedAt     DateTime       @default(now())
+
+  // Relations
+  topic Topic             @relation(fields: [topicId], references: [id], onDelete: Restrict)
+  group RegistrationGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  @@map("submissions")
+}
+
+// ─────────────────────────────────────────────────────────
+// GROUP 6: DEFENSE COUNCILS
+// ─────────────────────────────────────────────────────────
+
+model Council {
+  id         Int      @id @default(autoincrement())
+  semesterId Int
+  name       String
+  location   String?
+  defenseDate DateTime
+  createdAt  DateTime @default(now())
+
+  // Relations
+  semester Semester        @relation(fields: [semesterId], references: [id], onDelete: Restrict)
+  members  CouncilMember[]
+  topics   CouncilTopic[]
+
+  @@map("councils")
+}
+
+model CouncilMember {
+  id          Int               @id @default(autoincrement())
+  councilId   Int
+  lecturerId  Int
+  councilRole CouncilMemberRole
+
+  // Relations
+  council  Council         @relation(fields: [councilId], references: [id], onDelete: Cascade)
+  lecturer LecturerProfile @relation(fields: [lecturerId], references: [id], onDelete: Restrict)
+
+  @@unique([councilId, lecturerId])
+  @@map("council_members")
+}
+
+model CouncilTopic {
+  id         Int       @id @default(autoincrement())
+  councilId  Int
+  topicId    Int       @unique // Each topic is defended in exactly one council session
+  groupId    Int       @unique // Each group presents in exactly one council session
+  reviewerId Int       // Assigned reviewer (GV Phản biện)
+  timeSlot   String?
+
+  // Relations
+  council  Council         @relation(fields: [councilId], references: [id], onDelete: Cascade)
+  topic    Topic           @relation(fields: [topicId], references: [id], onDelete: Restrict)
+  group    RegistrationGroup @relation(fields: [groupId], references: [id], onDelete: Restrict)
+  reviewer LecturerProfile @relation(fields: [reviewerId], references: [id], onDelete: Restrict)
+
+  grades CouncilTopicGrade[]
+
+  @@map("council_topics")
+}
+
+model CouncilTopicGrade {
+  id             Int    @id @default(autoincrement())
+  councilTopicId Int
+  studentId      Int
+  councilGrade   Float? // Grade from the full council panel
+  reviewerGrade  Float? // Grade from the assigned reviewer
+
+  // Relations
+  councilTopic CouncilTopic   @relation(fields: [councilTopicId], references: [id], onDelete: Cascade)
+  student      StudentProfile @relation(fields: [studentId], references: [id], onDelete: Restrict)
+
+  @@unique([councilTopicId, studentId])
+  @@map("council_topic_grades")
+}
+
+// ─────────────────────────────────────────────────────────
+// GROUP 7: NOTIFICATIONS
+// ─────────────────────────────────────────────────────────
+
+model Notification {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  title     String
+  content   String   @db.Text
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  // Relations
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("notifications")
+}
+
+// ─────────────────────────────────────────────────────────
+// GROUP 8: AUDIT LOGS
+// ─────────────────────────────────────────────────────────
+
+model AuditLog {
+  id          Int      @id @default(autoincrement())
+  userId      Int
+  action      String   // e.g. UPDATE_GRADE, DELETE_TOPIC, LOCK_ACCOUNT
+  targetTable String   // Table name affected
+  targetId    String   // Stringified PK of the affected record
+  oldValue    Json?    // Snapshot before the change
+  newValue    Json?    // Snapshot after the change
+  createdAt   DateTime @default(now())
+
+  // Relations
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@map("audit_logs")
+}
+
+
