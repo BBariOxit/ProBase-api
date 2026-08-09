@@ -59,4 +59,25 @@ export class AuthService {
       user: { id: user.id, email: user.email, role: user.role },
     };
   }
+
+  async getMe(userId: number) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        email: true,
+        role: true,
+        isActive: true,
+        createdAt: true,
+        updatedAt: true,
+        studentProfile: true,
+        lecturerProfile: true,
+      },
+    });
+
+    if (!user || !user.isActive)
+      throw new UnauthorizedException('User not found or inactive');
+
+    return user;
+  }
 }
