@@ -79,6 +79,7 @@ model User {
   lecturerProfile LecturerProfile?
   notifications   Notification[]
   auditLogs       AuditLog[]
+  refreshTokens   RefreshToken[]
 
   @@map("users")
 }
@@ -426,4 +427,20 @@ model AuditLog {
   @@map("audit_logs")
 }
 
+// ─────────────────────────────────────────────────────────
+// GROUP 9: REFRESH TOKENS
+// ─────────────────────────────────────────────────────────
+
+model RefreshToken {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  tokenHash String   @unique // SHA-256 hash of the refresh token
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  // Relations
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("refresh_tokens")
+}
 
