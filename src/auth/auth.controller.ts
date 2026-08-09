@@ -6,31 +6,33 @@ import {
   HttpStatus,
   Patch,
   Post,
-  UseGuards,
 } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { GetUser } from './decorators/get-user.decorator';
+import { Public } from './decorators/public.decorator';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import { LoginDto } from './dto/login.dto';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { RegisterDto } from './dto/register.dto';
-import { JwtAuthGuard } from './guards/jwt-auth.guard';
 
 @Controller('auth')
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
+  @Public()
   @Post('register')
   register(@Body() dto: RegisterDto) {
     return this.authService.register(dto);
   }
 
+  @Public()
   @Post('login')
   @HttpCode(HttpStatus.OK)
   login(@Body() dto: LoginDto) {
     return this.authService.login(dto);
   }
 
+  @Public()
   @Post('refresh')
   @HttpCode(HttpStatus.OK)
   refresh(@Body() dto: RefreshTokenDto) {
@@ -38,20 +40,17 @@ export class AuthController {
   }
 
   @Post('logout')
-  @UseGuards(JwtAuthGuard)
   @HttpCode(HttpStatus.OK)
   logout(@GetUser('id') userId: number) {
     return this.authService.logout(userId);
   }
 
   @Get('me')
-  @UseGuards(JwtAuthGuard)
   getMe(@GetUser('id') userId: number) {
     return this.authService.getMe(userId);
   }
 
   @Patch('change-password')
-  @UseGuards(JwtAuthGuard)
   changePassword(
     @GetUser('id') userId: number,
     @Body() dto: ChangePasswordDto,
