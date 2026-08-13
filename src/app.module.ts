@@ -8,6 +8,7 @@ import { MajorsModule } from './majors/majors.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { ProjectTypesModule } from './project-types/project-types.module';
 import { SemestersModule } from './semesters/semesters.module';
+import { UsersModule } from './users/users.module';
 
 @Module({
   imports: [
@@ -18,6 +19,7 @@ import { SemestersModule } from './semesters/semesters.module';
     MajorsModule,
     SemestersModule,
     ProjectTypesModule,
+    UsersModule,
   ],
   controllers: [AppController],
   providers: [AppService],
