@@ -66,13 +66,14 @@ enum CouncilMemberRole {
 // ─────────────────────────────────────────────────────────
 
 model User {
-  id        Int      @id @default(autoincrement())
-  email     String   @unique
-  password  String   // Bcrypt / Argon2 hash — never store plaintext
-  role      Role
-  isActive  Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id                  Int      @id @default(autoincrement())
+  email               String   @unique
+  password            String   // Bcrypt / Argon2 hash — never store plaintext
+  role                Role
+  isActive            Boolean  @default(true)
+  mustChangePassword  Boolean  @default(false) // true = admin-created, user must change on first login
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
 
   // Relations
   studentProfile  StudentProfile?
