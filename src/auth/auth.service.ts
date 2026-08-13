@@ -63,7 +63,12 @@ export class AuthService {
 
     return {
       ...tokens,
-      user: { id: user.id, email: user.email, role: user.role },
+      user: {
+        id: user.id,
+        email: user.email,
+        role: user.role,
+        mustChangePassword: user.mustChangePassword,
+      },
     };
   }
 
@@ -157,12 +162,22 @@ export class AuthService {
 
     const hash = await bcrypt.hash(dto.newPassword, 10);
 
+    // Update password and clear the force-change flag in one query
     await this.prisma.user.update({
       where: { id: userId },
-      data: { password: hash },
+      data: { password: hash, mustChangePassword: false },
     });
 
-    return { message: 'Password changed successfully' };
+    // Revoke all existing refresh tokens so old sessions are invalidated
+    await this.prisma.refreshToken.deleteMany({ where: { userId } });
+
+    // Issue a fresh token pair — user stays logged in seamlessly
+    const tokens = await this.generateTokenPair(userId, user.email, user.role);
+
+    return {
+      message: 'Password changed successfully',
+      ...tokens,
+    };
   }
 
   // ── Private helpers ──────────────────────────────────────
