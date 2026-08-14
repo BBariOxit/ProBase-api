@@ -46,6 +46,31 @@ const USER_SELECT = {
   updatedAt: true,
 } as const;
 
+/**
+ * P2002 reports that a unique constraint tripped, not which one. Reading
+ * meta.target matters because the email pre-check and the insert are not
+ * atomic — a concurrent request can take the address in between — and blaming
+ * that on a duplicate student code sends the admin auditing the wrong column.
+ *
+ * Returns null when the error is not a unique-constraint violation at all, and
+ * an empty array when Prisma gave us no target to work with.
+ */
+function conflictingUniqueFields(err: unknown): string[] | null {
+  if (
+    !(err instanceof Prisma.PrismaClientKnownRequestError) ||
+    err.code !== 'P2002'
+  ) {
+    return null;
+  }
+
+  const target = err.meta?.target;
+  if (Array.isArray(target)) {
+    return (target as unknown[]).map((field) => String(field).toLowerCase());
+  }
+  if (typeof target === 'string') return [target.toLowerCase()];
+  return [];
+}
+
 // Excludes visually ambiguous characters (0/O, 1/l/I)
 const TEMP_PASSWORD_CHARSET =
   'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
@@ -157,15 +182,15 @@ export class UsersService {
     const passwordHash = await bcrypt.hash(tempPassword, 10);
 
     const user = await this.createAccountWithProfile(dto, passwordHash).catch(
-      (err) => {
-        if (
-          err instanceof Prisma.PrismaClientKnownRequestError &&
-          err.code === 'P2002'
-        ) {
-          const codeLabel = dto.role === 'STUDENT' ? 'Student' : 'Lecturer';
-          throw new ConflictException(`${codeLabel} code is already in use`);
+      (err: unknown) => {
+        const conflict = conflictingUniqueFields(err);
+        if (!conflict) throw err;
+
+        if (conflict.some((field) => field.includes('email'))) {
+          throw new ConflictException('Email already in use');
         }
-        throw err;
+        const codeLabel = dto.role === 'STUDENT' ? 'Student' : 'Lecturer';
+        throw new ConflictException(`${codeLabel} code is already in use`);
       },
     );
 
@@ -309,15 +334,10 @@ export class UsersService {
           }
         });
       } catch (err) {
-        const codeField = data.role === 'STUDENT' ? 'Student' : 'Lecturer';
         failed.push({
           row: raw.rowNumber,
           email: data.email,
-          reason:
-            err instanceof Prisma.PrismaClientKnownRequestError &&
-            err.code === 'P2002'
-              ? `${codeField} code "${data.code}" is already in use`
-              : 'Unexpected error creating account',
+          reason: this.describeCreateFailure(err, data.role, data.code),
         });
         continue;
       }
@@ -512,6 +532,25 @@ export class UsersService {
 
       return user;
     });
+  }
+
+  /** Turns a failed row insert into something an admin can act on. */
+  private describeCreateFailure(
+    err: unknown,
+    role: 'STUDENT' | 'LECTURER',
+    code: string,
+  ): string {
+    const conflict = conflictingUniqueFields(err);
+    if (!conflict) return 'Unexpected error creating account';
+
+    if (conflict.some((field) => field.includes('email'))) {
+      return 'Email already in use';
+    }
+
+    const codeLabel = role === 'STUDENT' ? 'Student' : 'Lecturer';
+    return conflict.length
+      ? `${codeLabel} code "${code}" is already in use`
+      : `${codeLabel} code or email is already in use`;
   }
 
   private generateTempPassword(): string {
