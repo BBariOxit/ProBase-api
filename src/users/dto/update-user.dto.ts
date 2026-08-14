@@ -1,10 +1,11 @@
 import { createZodDto } from 'nestjs-zod';
 import { z } from 'zod';
 import { Role } from '../../../generated/prisma/client';
+import { emailSchema } from '../../common/email.schema';
 
 export const UpdateUserSchema = z
   .object({
-    email: z.string().email('Invalid email address').optional(),
+    email: emailSchema.optional(),
     role: z.nativeEnum(Role).optional(),
     isActive: z.boolean().optional(),
   })

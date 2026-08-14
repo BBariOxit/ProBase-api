@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { emailSchema } from '../../common/email.schema';
 
 // Expected spreadsheet columns (header names, case-insensitive):
 // email, role, fullName, code, majorCode (STUDENT), departmentCode (LECTURER),
@@ -7,7 +8,7 @@ import { z } from 'zod';
 
 const StudentImportRowSchema = z.object({
   role: z.literal('STUDENT'),
-  email: z.string().email('Invalid email address'),
+  email: emailSchema,
   fullName: z.string().min(1, 'fullName is required').max(255),
   code: z.string().min(1, 'code is required').max(50),
   majorCode: z
@@ -22,7 +23,7 @@ const StudentImportRowSchema = z.object({
 
 const LecturerImportRowSchema = z.object({
   role: z.literal('LECTURER'),
-  email: z.string().email('Invalid email address'),
+  email: emailSchema,
   fullName: z.string().min(1, 'fullName is required').max(255),
   code: z.string().min(1, 'code is required').max(50),
   departmentCode: z

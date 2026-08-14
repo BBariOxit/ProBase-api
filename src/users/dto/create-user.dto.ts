@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { Role } from '../../../generated/prisma/client';
+import { emailSchema } from '../../common/email.schema';
 
 // A STUDENT/LECTURER account is meaningless without its profile — every
 // downstream relation (groups, grades, topics) points at the profile, not the
@@ -17,7 +18,7 @@ const requiredTrimmed = (max: number, message: string) =>
 
 const StudentCreateSchema = z.object({
   role: z.literal(Role.STUDENT),
-  email: z.string().email('Invalid email address'),
+  email: emailSchema,
   studentCode: requiredTrimmed(50, 'Student code is required'),
   fullName: requiredTrimmed(255, 'Full name is required'),
   majorId: z.number().int().positive().optional(),
@@ -29,7 +30,7 @@ const StudentCreateSchema = z.object({
 
 const LecturerCreateSchema = z.object({
   role: z.literal(Role.LECTURER),
-  email: z.string().email('Invalid email address'),
+  email: emailSchema,
   lecturerCode: requiredTrimmed(50, 'Lecturer code is required'),
   fullName: requiredTrimmed(255, 'Full name is required'),
   departmentId: z.number().int().positive().optional(),
@@ -41,7 +42,7 @@ const LecturerCreateSchema = z.object({
 
 const AdminCreateSchema = z.object({
   role: z.literal(Role.ADMIN),
-  email: z.string().email('Invalid email address'),
+  email: emailSchema,
 });
 
 export const CreateUserSchema = z.discriminatedUnion('role', [
