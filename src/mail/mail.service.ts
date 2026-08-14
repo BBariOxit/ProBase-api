@@ -103,7 +103,6 @@ export class MailService {
         <tr>
           <td style="background:linear-gradient(135deg,#1e3a5f,#2e6da4);padding:36px 40px;text-align:center;">
             <h1 style="margin:0;color:#fff;font-size:26px;">ProBase</h1>
-            <p style="margin:6px 0 0;color:#c8ddf0;font-size:13px;">Hệ thống Quản lý Đề tài Khóa luận</p>
           </td>
         </tr>
         <tr>
