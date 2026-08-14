@@ -5,13 +5,19 @@ import {
   Get,
   HttpCode,
   HttpStatus,
+  MaxFileSizeValidator,
   Param,
+  ParseFilePipe,
   ParseIntPipe,
   Patch,
   Post,
   Put,
   Query,
+  UploadedFile,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { memoryStorage } from 'multer';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { CreateUserDto } from './dto/create-user.dto';
 import { QueryUsersDto } from './dto/query-users.dto';
@@ -40,6 +46,26 @@ export class UsersController {
   @Post()
   create(@Body() dto: CreateUserDto) {
     return this.usersService.create(dto);
+  }
+
+  // ── Bulk import ───────────────────────────────────────────
+  // Accepts an .xlsx or .csv roster of students/lecturers, creates one
+  // account per valid row, and emails each a temp password. Bad rows are
+  // reported back individually — one bad row never fails the whole batch.
+
+  @Post('bulk-import')
+  @HttpCode(HttpStatus.OK)
+  @UseInterceptors(FileInterceptor('file', { storage: memoryStorage() }))
+  bulkImport(
+    @UploadedFile(
+      new ParseFilePipe({
+        validators: [new MaxFileSizeValidator({ maxSize: 5 * 1024 * 1024 })],
+        fileIsRequired: true,
+      }),
+    )
+    file: Express.Multer.File,
+  ) {
+    return this.usersService.bulkImport(file);
   }
 
   @Patch(':id')

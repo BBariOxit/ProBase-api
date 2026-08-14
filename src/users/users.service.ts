@@ -1,10 +1,12 @@
 import {
+  BadRequestException,
   ConflictException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
 import { randomInt } from 'crypto';
+import { Prisma } from '../../generated/prisma/client';
 import { MailService } from '../mail/mail.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateUserDto } from './dto/create-user.dto';
@@ -12,6 +14,27 @@ import { QueryUsersDto } from './dto/query-users.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { UpsertLecturerProfileDto } from './dto/upsert-lecturer-profile.dto';
 import { UpsertStudentProfileDto } from './dto/upsert-student-profile.dto';
+import {
+  formatImportRowError,
+  ImportRowSchema,
+  toImportRowInput,
+} from './import/import-row.schema';
+import { parseImportFile } from './import/parse-import-file.util';
+
+export interface BulkImportRowResult {
+  row: number;
+  email?: string;
+  role?: 'STUDENT' | 'LECTURER';
+  reason?: string;
+}
+
+export interface BulkImportResult {
+  total: number;
+  createdCount: number;
+  failedCount: number;
+  created: BulkImportRowResult[];
+  failed: BulkImportRowResult[];
+}
 
 // Safe user select — never expose password hash
 const USER_SELECT = {
@@ -150,6 +173,175 @@ export class UsersService {
     });
 
     return user;
+  }
+
+  // ── bulkImport ───────────────────────────────────────────
+
+  async bulkImport(file?: Express.Multer.File): Promise<BulkImportResult> {
+    if (!file) throw new BadRequestException('No file uploaded');
+
+    let rows: Awaited<ReturnType<typeof parseImportFile>>;
+    try {
+      rows = await parseImportFile(file.buffer, file.originalname);
+    } catch (err) {
+      throw new BadRequestException(
+        `Could not read import file: ${err instanceof Error ? err.message : 'unknown error'}`,
+      );
+    }
+
+    if (rows.length === 0) {
+      throw new BadRequestException('Import file has no data rows');
+    }
+
+    // Prefetch code -> id lookups once instead of querying per row
+    const [majors, departments] = await Promise.all([
+      this.prisma.major.findMany({ select: { id: true, code: true } }),
+      this.prisma.department.findMany({ select: { id: true, code: true } }),
+    ]);
+    const majorIdByCode = new Map(majors.map((m) => [m.code, m.id]));
+    const departmentIdByCode = new Map(departments.map((d) => [d.code, d.id]));
+
+    const created: BulkImportRowResult[] = [];
+    const failed: BulkImportRowResult[] = [];
+    const emailsSeenInFile = new Set<string>();
+    const pendingEmails: Parameters<MailService['sendAccountCreated']>[0][] =
+      [];
+
+    for (const raw of rows) {
+      const input = toImportRowInput(raw.values);
+      const parsed = ImportRowSchema.safeParse(input);
+
+      if (!parsed.success) {
+        failed.push({
+          row: raw.rowNumber,
+          email: raw.values.email,
+          reason: formatImportRowError(parsed.error),
+        });
+        continue;
+      }
+
+      const data = parsed.data;
+
+      if (emailsSeenInFile.has(data.email)) {
+        failed.push({
+          row: raw.rowNumber,
+          email: data.email,
+          reason: 'Duplicate email within the file',
+        });
+        continue;
+      }
+      emailsSeenInFile.add(data.email);
+
+      const relationId =
+        data.role === 'STUDENT'
+          ? majorIdByCode.get(data.majorCode)
+          : departmentIdByCode.get(data.departmentCode);
+
+      if (relationId === undefined) {
+        const codeLabel =
+          data.role === 'STUDENT' ? 'majorCode' : 'departmentCode';
+        const codeValue =
+          data.role === 'STUDENT' ? data.majorCode : data.departmentCode;
+        failed.push({
+          row: raw.rowNumber,
+          email: data.email,
+          reason: `${codeLabel} "${codeValue}" not found`,
+        });
+        continue;
+      }
+
+      const existing = await this.prisma.user.findUnique({
+        where: { email: data.email },
+      });
+      if (existing) {
+        failed.push({
+          row: raw.rowNumber,
+          email: data.email,
+          reason: 'Email already in use',
+        });
+        continue;
+      }
+
+      const tempPassword = this.generateTempPassword();
+      const passwordHash = await bcrypt.hash(tempPassword, 10);
+
+      try {
+        await this.prisma.$transaction(async (tx) => {
+          const user = await tx.user.create({
+            data: {
+              email: data.email,
+              password: passwordHash,
+              role: data.role,
+              mustChangePassword: true,
+            },
+          });
+
+          if (data.role === 'STUDENT') {
+            await tx.studentProfile.create({
+              data: {
+                userId: user.id,
+                studentCode: data.code,
+                fullName: data.fullName,
+                majorId: relationId,
+                class: data.class,
+                cohort: data.cohort,
+                phone: data.phone,
+                bio: data.bio,
+              },
+            });
+          } else {
+            await tx.lecturerProfile.create({
+              data: {
+                userId: user.id,
+                lecturerCode: data.code,
+                fullName: data.fullName,
+                departmentId: relationId,
+                academicTitle: data.academicTitle,
+                phone: data.phone,
+                bio: data.bio,
+                researchInterests: data.researchInterests,
+              },
+            });
+          }
+        });
+      } catch (err) {
+        const codeField = data.role === 'STUDENT' ? 'Student' : 'Lecturer';
+        failed.push({
+          row: raw.rowNumber,
+          email: data.email,
+          reason:
+            err instanceof Prisma.PrismaClientKnownRequestError &&
+            err.code === 'P2002'
+              ? `${codeField} code "${data.code}" is already in use`
+              : 'Unexpected error creating account',
+        });
+        continue;
+      }
+
+      created.push({ row: raw.rowNumber, email: data.email, role: data.role });
+      pendingEmails.push({
+        to: data.email,
+        fullName: data.fullName,
+        tempPassword,
+        role: data.role,
+      });
+    }
+
+    // Best-effort concurrent delivery — a failed send never fails the import,
+    // MailService already swallows and logs its own errors.
+    await Promise.allSettled(
+      pendingEmails.map((payload) =>
+        this.mailService.sendAccountCreated(payload),
+      ),
+    );
+
+    return {
+      total: rows.length,
+      createdCount: created.length,
+      failedCount: failed.length,
+      created,
+      failed,
+    };
   }
 
   // ── update ────────────────────────────────────────────────
