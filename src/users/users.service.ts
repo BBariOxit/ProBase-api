@@ -233,6 +233,9 @@ export class UsersService {
     const created: BulkImportRowResult[] = [];
     const failed: BulkImportRowResult[] = [];
     const emailsSeenInFile = new Set<string>();
+    // Student and lecturer codes live in separate tables with separate unique
+    // indexes, so the same string under both roles is not a collision.
+    const codesSeenInFile = new Set<string>();
     const pendingEmails: Parameters<MailService['sendAccountCreated']>[0][] =
       [];
 
@@ -260,6 +263,17 @@ export class UsersService {
         continue;
       }
       emailsSeenInFile.add(data.email);
+
+      const codeKey = `${data.role}:${data.code}`;
+      if (codesSeenInFile.has(codeKey)) {
+        failed.push({
+          row: raw.rowNumber,
+          email: data.email,
+          reason: `Duplicate code "${data.code}" within the file`,
+        });
+        continue;
+      }
+      codesSeenInFile.add(codeKey);
 
       const relationId =
         data.role === 'STUDENT'
