@@ -5,7 +5,6 @@ import {
   Get,
   HttpCode,
   HttpStatus,
-  MaxFileSizeValidator,
   Param,
   ParseFilePipe,
   ParseIntPipe,
@@ -27,6 +26,8 @@ import { UpdateUserDto } from './dto/update-user.dto';
 import { UpsertLecturerProfileDto } from './dto/upsert-lecturer-profile.dto';
 import { UpsertStudentProfileDto } from './dto/upsert-student-profile.dto';
 import { UsersService } from './users.service';
+
+const MAX_IMPORT_FILE_BYTES = 5 * 1024 * 1024;
 
 @Roles('ADMIN')
 @Controller('users')
@@ -57,16 +58,20 @@ export class UsersController {
   // account per valid row, and emails each a temp password. Bad rows are
   // reported back individually — one bad row never fails the whole batch.
 
+  // The size cap belongs on multer, not on a validator: multer aborts the
+  // stream mid-upload, whereas a ParseFilePipe validator only inspects
+  // file.size once the whole body is already buffered in memory — which is
+  // exactly the memory we are trying not to spend.
   @Post('bulk-import')
   @HttpCode(HttpStatus.OK)
-  @UseInterceptors(FileInterceptor('file', { storage: memoryStorage() }))
+  @UseInterceptors(
+    FileInterceptor('file', {
+      storage: memoryStorage(),
+      limits: { fileSize: MAX_IMPORT_FILE_BYTES, files: 1 },
+    }),
+  )
   bulkImport(
-    @UploadedFile(
-      new ParseFilePipe({
-        validators: [new MaxFileSizeValidator({ maxSize: 5 * 1024 * 1024 })],
-        fileIsRequired: true,
-      }),
-    )
+    @UploadedFile(new ParseFilePipe({ validators: [], fileIsRequired: true }))
     file: Express.Multer.File,
   ) {
     return this.usersService.bulkImport(file);
