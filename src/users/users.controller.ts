@@ -15,7 +15,6 @@ import {
 import { Roles } from '../auth/decorators/roles.decorator';
 import { CreateUserDto } from './dto/create-user.dto';
 import { QueryUsersDto } from './dto/query-users.dto';
-import { ResetPasswordDto } from './dto/reset-password.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { UpsertLecturerProfileDto } from './dto/upsert-lecturer-profile.dto';
 import { UpsertStudentProfileDto } from './dto/upsert-student-profile.dto';
@@ -58,11 +57,8 @@ export class UsersController {
 
   @Post(':id/reset-password')
   @HttpCode(HttpStatus.OK)
-  resetPassword(
-    @Param('id', ParseIntPipe) id: number,
-    @Body() dto: ResetPasswordDto,
-  ) {
-    return this.usersService.resetPassword(id, dto);
+  resetPassword(@Param('id', ParseIntPipe) id: number) {
+    return this.usersService.resetPassword(id);
   }
 
   // ── Profiles ──────────────────────────────────────────────

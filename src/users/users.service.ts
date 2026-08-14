@@ -9,7 +9,6 @@ import { MailService } from '../mail/mail.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { QueryUsersDto } from './dto/query-users.dto';
-import { ResetPasswordDto } from './dto/reset-password.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { UpsertLecturerProfileDto } from './dto/upsert-lecturer-profile.dto';
 import { UpsertStudentProfileDto } from './dto/upsert-student-profile.dto';
@@ -186,18 +185,28 @@ export class UsersService {
 
   // ── resetPassword ─────────────────────────────────────────
 
-  async resetPassword(id: number, dto: ResetPasswordDto) {
-    await this.findOne(id);
+  async resetPassword(id: number) {
+    const user = await this.findOne(id);
 
-    const passwordHash = await bcrypt.hash(dto.newPassword, 10);
+    // Same pattern as create(): admin never sets the password directly — a
+    // fresh temp password is generated and delivered by email.
+    const tempPassword = this.generateTempPassword();
+    const passwordHash = await bcrypt.hash(tempPassword, 10);
 
     await this.prisma.user.update({
       where: { id },
-      data: { password: passwordHash },
+      data: { password: passwordHash, mustChangePassword: true },
     });
 
     // Revoke all refresh tokens so the user must re-login
     await this.prisma.refreshToken.deleteMany({ where: { userId: id } });
+
+    await this.mailService.sendPasswordReset({
+      to: user.email,
+      fullName: user.studentProfile?.fullName ?? user.lecturerProfile?.fullName,
+      tempPassword,
+      role: user.role,
+    });
 
     return { message: 'Password reset successfully' };
   }
