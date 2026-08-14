@@ -17,6 +17,21 @@ const ROLE_LABELS: Record<MailableRole, string> = {
   STUDENT: 'Sinh viên',
 };
 
+/**
+ * Names and addresses reach us from admin-uploaded spreadsheets, so they are
+ * untrusted text landing in an HTML document. Escaping keeps a name like
+ * `Trần <Anh> & Co` rendering as written rather than collapsing the layout —
+ * or injecting markup into mail we send out under the system's name.
+ */
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 @Injectable()
 export class MailService {
   private readonly logger = new Logger(MailService.name);
@@ -71,11 +86,7 @@ export class MailService {
         to: [{ email: to, name: fullName ?? to }],
         subject,
         htmlContent: this.buildTemplate({
-          // Only ADMIN accounts have no profile name — greet them without one
-          // rather than echoing their raw email address back at them.
-          greeting: fullName
-            ? `Xin chào <strong>${fullName}</strong>,`
-            : 'Xin chào,',
+          fullName,
           email: to,
           tempPassword,
           introText,
@@ -92,11 +103,18 @@ export class MailService {
   }
 
   private buildTemplate(data: {
-    greeting: string;
+    fullName?: string;
     email: string;
     tempPassword: string;
+    /** Built in this service from fixed copy — intentionally carries markup. */
     introText: string;
   }): string {
+    // Only ADMIN accounts have no profile name — greet them without one
+    // rather than echoing their raw email address back at them.
+    const greeting = data.fullName
+      ? `Xin chào <strong>${escapeHtml(data.fullName)}</strong>,`
+      : 'Xin chào,';
+
     return `<!DOCTYPE html>
 <html lang="vi">
 <head><meta charset="UTF-8"/><title>Tài khoản ProBase</title></head>
@@ -111,12 +129,12 @@ export class MailService {
         </tr>
         <tr>
           <td style="padding:40px;">
-            <p style="font-size:16px;color:#1a2b3c;">${data.greeting}</p>
+            <p style="font-size:16px;color:#1a2b3c;">${greeting}</p>
             <p style="font-size:14px;color:#4a5568;line-height:1.7;">${data.introText}</p>
             <table width="100%" style="background:#f0f7ff;border:1px solid #c2dcf5;border-radius:8px;margin:20px 0;">
               <tr><td style="padding:24px;">
-                <p style="margin:0 0 8px;font-size:13px;"><strong>Email:</strong> ${data.email}</p>
-                <p style="margin:0;font-size:13px;"><strong>Mật khẩu tạm:</strong> <span style="font-family:monospace;color:#c0392b;font-size:15px;font-weight:700;">${data.tempPassword}</span></p>
+                <p style="margin:0 0 8px;font-size:13px;"><strong>Email:</strong> ${escapeHtml(data.email)}</p>
+                <p style="margin:0;font-size:13px;"><strong>Mật khẩu tạm:</strong> <span style="font-family:monospace;color:#c0392b;font-size:15px;font-weight:700;">${escapeHtml(data.tempPassword)}</span></p>
               </td></tr>
             </table>
             <table width="100%" style="background:#fff8e1;border-left:4px solid #f59e0b;border-radius:4px;margin-bottom:28px;">
