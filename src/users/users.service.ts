@@ -14,12 +14,28 @@ import { QueryUsersDto } from './dto/query-users.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { UpsertLecturerProfileDto } from './dto/upsert-lecturer-profile.dto';
 import { UpsertStudentProfileDto } from './dto/upsert-student-profile.dto';
+import { mapWithConcurrency } from '../common/concurrency.util';
 import {
   formatImportRowError,
   ImportRowSchema,
   toImportRowInput,
 } from './import/import-row.schema';
+import type { ImportRow } from './import/import-row.schema';
 import { parseImportFile } from './import/parse-import-file.util';
+import type { ParsedImportRow } from './import/parse-import-file.util';
+
+/** A row that passed validation and resolved its major/department. */
+interface ValidatedImportRow {
+  rowNumber: number;
+  data: ImportRow;
+  relationId: number;
+}
+
+/** A validated row that also has its generated credentials ready to insert. */
+interface PreparedImportRow extends ValidatedImportRow {
+  tempPassword: string;
+  passwordHash: string;
+}
 
 export interface BulkImportRowResult {
   row: number;
@@ -75,6 +91,16 @@ function conflictingUniqueFields(err: unknown): string[] | null {
 const TEMP_PASSWORD_CHARSET =
   'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
 const TEMP_PASSWORD_LENGTH = 12;
+
+// bcrypt's async hash runs on the libuv thread pool, which defaults to four
+// threads — queueing more than that buys nothing.
+const PASSWORD_HASH_CONCURRENCY = 4;
+// Comfortably under Prisma's default connection pool, so a large import cannot
+// starve the requests running alongside it.
+const ACCOUNT_INSERT_CONCURRENCY = 5;
+
+const byRowNumber = (a: BulkImportRowResult, b: BulkImportRowResult) =>
+  a.row - b.row;
 
 @Injectable()
 export class UsersService {
@@ -222,148 +248,71 @@ export class UsersService {
       throw new BadRequestException('Import file has no data rows');
     }
 
-    // Prefetch code -> id lookups once instead of querying per row
-    const [majors, departments] = await Promise.all([
-      this.prisma.major.findMany({ select: { id: true, code: true } }),
-      this.prisma.department.findMany({ select: { id: true, code: true } }),
-    ]);
-    const majorIdByCode = new Map(majors.map((m) => [m.code, m.id]));
-    const departmentIdByCode = new Map(departments.map((d) => [d.code, d.id]));
+    const failed: BulkImportRowResult[] = [];
+
+    // Validate everything in memory first — a file that is entirely malformed
+    // then costs nothing beyond parsing it.
+    const validated = await this.validateImportRows(rows);
+    failed.push(...validated.failed);
+
+    // One query covering every address in the file, instead of one findUnique
+    // per row — the same prefetch shape already used for major/department.
+    const usable = await this.rejectTakenEmails(validated.valid);
+    failed.push(...usable.failed);
+
+    // Hashing dominates the cost of an import (~100ms of CPU per row at cost
+    // 10), so rows hash in parallel rather than each waiting on the last.
+    const prepared = await mapWithConcurrency(
+      usable.valid,
+      PASSWORD_HASH_CONCURRENCY,
+      async (row): Promise<PreparedImportRow> => {
+        const tempPassword = this.generateTempPassword();
+        return {
+          ...row,
+          tempPassword,
+          passwordHash: await bcrypt.hash(tempPassword, 10),
+        };
+      },
+    );
 
     const created: BulkImportRowResult[] = [];
-    const failed: BulkImportRowResult[] = [];
-    const emailsSeenInFile = new Set<string>();
-    // Student and lecturer codes live in separate tables with separate unique
-    // indexes, so the same string under both roles is not a collision.
-    const codesSeenInFile = new Set<string>();
     const pendingEmails: Parameters<MailService['sendAccountCreated']>[0][] =
       [];
 
-    for (const raw of rows) {
-      const input = toImportRowInput(raw.values);
-      const parsed = ImportRowSchema.safeParse(input);
-
-      if (!parsed.success) {
-        failed.push({
-          row: raw.rowNumber,
-          email: raw.values.email,
-          reason: formatImportRowError(parsed.error),
-        });
-        continue;
-      }
-
-      const data = parsed.data;
-
-      if (emailsSeenInFile.has(data.email)) {
-        failed.push({
-          row: raw.rowNumber,
-          email: data.email,
-          reason: 'Duplicate email within the file',
-        });
-        continue;
-      }
-      emailsSeenInFile.add(data.email);
-
-      const codeKey = `${data.role}:${data.code}`;
-      if (codesSeenInFile.has(codeKey)) {
-        failed.push({
-          row: raw.rowNumber,
-          email: data.email,
-          reason: `Duplicate code "${data.code}" within the file`,
-        });
-        continue;
-      }
-      codesSeenInFile.add(codeKey);
-
-      const relationId =
-        data.role === 'STUDENT'
-          ? majorIdByCode.get(data.majorCode)
-          : departmentIdByCode.get(data.departmentCode);
-
-      if (relationId === undefined) {
-        const codeLabel =
-          data.role === 'STUDENT' ? 'majorCode' : 'departmentCode';
-        const codeValue =
-          data.role === 'STUDENT' ? data.majorCode : data.departmentCode;
-        failed.push({
-          row: raw.rowNumber,
-          email: data.email,
-          reason: `${codeLabel} "${codeValue}" not found`,
-        });
-        continue;
-      }
-
-      const existing = await this.prisma.user.findUnique({
-        where: { email: data.email },
-      });
-      if (existing) {
-        failed.push({
-          row: raw.rowNumber,
-          email: data.email,
-          reason: 'Email already in use',
-        });
-        continue;
-      }
-
-      const tempPassword = this.generateTempPassword();
-      const passwordHash = await bcrypt.hash(tempPassword, 10);
-
-      try {
-        await this.prisma.$transaction(async (tx) => {
-          const user = await tx.user.create({
-            data: {
-              email: data.email,
-              password: passwordHash,
-              role: data.role,
-              mustChangePassword: true,
-            },
+    // Each row keeps its own transaction, so one bad row still cannot roll
+    // back the rest of the roster.
+    await mapWithConcurrency(
+      prepared,
+      ACCOUNT_INSERT_CONCURRENCY,
+      async (row) => {
+        try {
+          await this.insertAccount(row);
+        } catch (err) {
+          failed.push({
+            row: row.rowNumber,
+            email: row.data.email,
+            reason: this.describeCreateFailure(
+              err,
+              row.data.role,
+              row.data.code,
+            ),
           });
+          return;
+        }
 
-          if (data.role === 'STUDENT') {
-            await tx.studentProfile.create({
-              data: {
-                userId: user.id,
-                studentCode: data.code,
-                fullName: data.fullName,
-                majorId: relationId,
-                class: data.class,
-                cohort: data.cohort,
-                phone: data.phone,
-                bio: data.bio,
-              },
-            });
-          } else {
-            await tx.lecturerProfile.create({
-              data: {
-                userId: user.id,
-                lecturerCode: data.code,
-                fullName: data.fullName,
-                departmentId: relationId,
-                academicTitle: data.academicTitle,
-                phone: data.phone,
-                bio: data.bio,
-                researchInterests: data.researchInterests,
-              },
-            });
-          }
+        created.push({
+          row: row.rowNumber,
+          email: row.data.email,
+          role: row.data.role,
         });
-      } catch (err) {
-        failed.push({
-          row: raw.rowNumber,
-          email: data.email,
-          reason: this.describeCreateFailure(err, data.role, data.code),
+        pendingEmails.push({
+          to: row.data.email,
+          fullName: row.data.fullName,
+          tempPassword: row.tempPassword,
+          role: row.data.role,
         });
-        continue;
-      }
-
-      created.push({ row: raw.rowNumber, email: data.email, role: data.role });
-      pendingEmails.push({
-        to: data.email,
-        fullName: data.fullName,
-        tempPassword,
-        role: data.role,
-      });
-    }
+      },
+    );
 
     // Best-effort concurrent delivery — a failed send never fails the import,
     // MailService already swallows and logs its own errors.
@@ -372,6 +321,12 @@ export class UsersService {
         this.mailService.sendAccountCreated(payload),
       ),
     );
+
+    // Rows finish out of order once inserts run concurrently, but the admin
+    // reads these side by side with the spreadsheet — hand them back in row
+    // order.
+    created.sort(byRowNumber);
+    failed.sort(byRowNumber);
 
     return {
       total: rows.length,
@@ -545,6 +500,162 @@ export class UsersService {
       }
 
       return user;
+    });
+  }
+
+  /**
+   * Validates and de-duplicates every row against one prefetch of the major
+   * and department tables. Pure CPU work beyond that single prefetch.
+   */
+  private async validateImportRows(rows: ParsedImportRow[]): Promise<{
+    valid: ValidatedImportRow[];
+    failed: BulkImportRowResult[];
+  }> {
+    const [majors, departments] = await Promise.all([
+      this.prisma.major.findMany({ select: { id: true, code: true } }),
+      this.prisma.department.findMany({ select: { id: true, code: true } }),
+    ]);
+    const majorIdByCode = new Map(majors.map((m) => [m.code, m.id]));
+    const departmentIdByCode = new Map(departments.map((d) => [d.code, d.id]));
+
+    const valid: ValidatedImportRow[] = [];
+    const failed: BulkImportRowResult[] = [];
+    const emailsSeenInFile = new Set<string>();
+    // Student and lecturer codes live in separate tables with separate unique
+    // indexes, so the same string under both roles is not a collision.
+    const codesSeenInFile = new Set<string>();
+
+    for (const raw of rows) {
+      const parsed = ImportRowSchema.safeParse(toImportRowInput(raw.values));
+
+      if (!parsed.success) {
+        failed.push({
+          row: raw.rowNumber,
+          email: raw.values.email,
+          reason: formatImportRowError(parsed.error),
+        });
+        continue;
+      }
+
+      const data = parsed.data;
+
+      if (emailsSeenInFile.has(data.email)) {
+        failed.push({
+          row: raw.rowNumber,
+          email: data.email,
+          reason: 'Duplicate email within the file',
+        });
+        continue;
+      }
+      emailsSeenInFile.add(data.email);
+
+      const codeKey = `${data.role}:${data.code}`;
+      if (codesSeenInFile.has(codeKey)) {
+        failed.push({
+          row: raw.rowNumber,
+          email: data.email,
+          reason: `Duplicate code "${data.code}" within the file`,
+        });
+        continue;
+      }
+      codesSeenInFile.add(codeKey);
+
+      const relationId =
+        data.role === 'STUDENT'
+          ? majorIdByCode.get(data.majorCode)
+          : departmentIdByCode.get(data.departmentCode);
+
+      if (relationId === undefined) {
+        const codeLabel =
+          data.role === 'STUDENT' ? 'majorCode' : 'departmentCode';
+        const codeValue =
+          data.role === 'STUDENT' ? data.majorCode : data.departmentCode;
+        failed.push({
+          row: raw.rowNumber,
+          email: data.email,
+          reason: `${codeLabel} "${codeValue}" not found`,
+        });
+        continue;
+      }
+
+      valid.push({ rowNumber: raw.rowNumber, data, relationId });
+    }
+
+    return { valid, failed };
+  }
+
+  /** Splits out rows whose address is already taken, in a single query. */
+  private async rejectTakenEmails(rows: ValidatedImportRow[]): Promise<{
+    valid: ValidatedImportRow[];
+    failed: BulkImportRowResult[];
+  }> {
+    if (rows.length === 0) return { valid: [], failed: [] };
+
+    const existing = await this.prisma.user.findMany({
+      where: { email: { in: rows.map((row) => row.data.email) } },
+      select: { email: true },
+    });
+    const taken = new Set(existing.map((user) => user.email));
+
+    const valid: ValidatedImportRow[] = [];
+    const failed: BulkImportRowResult[] = [];
+
+    for (const row of rows) {
+      if (taken.has(row.data.email)) {
+        failed.push({
+          row: row.rowNumber,
+          email: row.data.email,
+          reason: 'Email already in use',
+        });
+      } else {
+        valid.push(row);
+      }
+    }
+
+    return { valid, failed };
+  }
+
+  /** Writes one imported account and its role profile atomically. */
+  private insertAccount(row: PreparedImportRow) {
+    const { data, relationId, passwordHash } = row;
+
+    return this.prisma.$transaction(async (tx) => {
+      const user = await tx.user.create({
+        data: {
+          email: data.email,
+          password: passwordHash,
+          role: data.role,
+          mustChangePassword: true,
+        },
+      });
+
+      if (data.role === 'STUDENT') {
+        await tx.studentProfile.create({
+          data: {
+            userId: user.id,
+            studentCode: data.code,
+            fullName: data.fullName,
+            majorId: relationId,
+            class: data.class,
+            cohort: data.cohort,
+            phone: data.phone,
+            bio: data.bio,
+          },
+        });
+      } else {
+        await tx.lecturerProfile.create({
+          data: {
+            userId: user.id,
+            lecturerCode: data.code,
+            fullName: data.fullName,
+            departmentId: relationId,
+            academicTitle: data.academicTitle,
+            phone: data.phone,
+            bio: data.bio,
+            researchInterests: data.researchInterests,
+          },
+        });
+      }
     });
   }
 
