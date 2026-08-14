@@ -28,16 +28,26 @@ const DEMO_STUDENT_EMAIL = (
 const DEMO_STUDENT_PASSWORD =
   process.env.SEED_STUDENT_PASSWORD ?? 'Student@123';
 
+// The whole system serves one faculty (the admin role is "Giáo vụ Khoa"), so
+// `departments` are the bộ môn inside Khoa CNTT — not faculties of a
+// university. Swap these for your faculty's real divisions.
 const DEPARTMENTS = [
-  { code: 'CNTT', name: 'Khoa Công nghệ Thông tin' },
-  { code: 'DTVT', name: 'Khoa Điện tử — Viễn thông' },
+  { code: 'CNPM', name: 'Bộ môn Công nghệ Phần mềm' },
+  { code: 'HTTT', name: 'Bộ môn Hệ thống Thông tin' },
+  { code: 'KHMT', name: 'Bộ môn Khoa học Máy tính' },
+  { code: 'MMT', name: 'Bộ môn Mạng máy tính và Truyền thông' },
+  { code: 'ATTT', name: 'Bộ môn An toàn Thông tin' },
 ];
 
+// Chuyên ngành, each owned by one bộ môn. Codes only need to be unique within
+// their own table, so a chuyên ngành may share a code with its bộ môn.
 const MAJORS = [
-  { code: 'KTPM', name: 'Kỹ thuật Phần mềm', department: 'CNTT' },
-  { code: 'HTTT', name: 'Hệ thống Thông tin', department: 'CNTT' },
-  { code: 'ATTT', name: 'An toàn Thông tin', department: 'CNTT' },
-  { code: 'DTMT', name: 'Điện tử Máy tính', department: 'DTVT' },
+  { code: 'KTPM', name: 'Kỹ thuật Phần mềm', department: 'CNPM' },
+  { code: 'HTTT', name: 'Hệ thống Thông tin', department: 'HTTT' },
+  { code: 'KHMT', name: 'Khoa học Máy tính', department: 'KHMT' },
+  { code: 'TTNT', name: 'Trí tuệ Nhân tạo', department: 'KHMT' },
+  { code: 'MMT', name: 'Mạng máy tính và Truyền thông', department: 'MMT' },
+  { code: 'ATTT', name: 'An toàn Thông tin', department: 'ATTT' },
 ];
 
 const PROJECT_TYPES = [
