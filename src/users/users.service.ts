@@ -384,12 +384,35 @@ export class UsersService {
 
   // ── remove ────────────────────────────────────────────────
 
+  /**
+   * Deactivates rather than deletes.
+   *
+   * A hard delete cannot survive contact with this schema: audit_logs.userId is
+   * ON DELETE RESTRICT precisely so a record of who changed a grade cannot be
+   * erased, and a student who has joined a group is held by RESTRICT there too.
+   * Removing an account that has done anything would therefore fail — and where
+   * it did succeed, it would take the audit trail with it.
+   *
+   * FR_ADM_01 asks for "khóa (deactivate)" alongside delete; this is that.
+   * Reactivation goes through PATCH /users/:id with isActive.
+   */
   async remove(id: number) {
-    await this.findOne(id);
+    const user = await this.findOne(id);
 
-    await this.prisma.user.delete({ where: { id } });
+    if (!user.isActive) {
+      throw new ConflictException(`User #${id} is already deactivated`);
+    }
 
-    return { message: `User #${id} deleted successfully` };
+    await this.prisma.user.update({
+      where: { id },
+      data: { isActive: false },
+    });
+
+    // Deactivation has to take effect now, not whenever the current access
+    // token happens to expire.
+    await this.prisma.refreshToken.deleteMany({ where: { userId: id } });
+
+    return { message: `User #${id} deactivated successfully` };
   }
 
   // ── resetPassword ─────────────────────────────────────────
