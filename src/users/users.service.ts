@@ -42,12 +42,21 @@ export interface BulkImportRowResult {
   email?: string;
   role?: 'STUDENT' | 'LECTURER';
   reason?: string;
+  /** Created rows only: whether the credentials email actually went out. */
+  emailSent?: boolean;
 }
 
 export interface BulkImportResult {
   total: number;
   createdCount: number;
   failedCount: number;
+  /**
+   * Accounts that exist but whose credentials never reached anyone. The temp
+   * password is not recoverable, so each of these needs an admin
+   * reset-password before that user can log in — hence a top-level count
+   * rather than something the admin has to spot by scanning rows.
+   */
+  emailsFailedCount: number;
   created: BulkImportRowResult[];
   failed: BulkImportRowResult[];
 }
@@ -98,6 +107,9 @@ const PASSWORD_HASH_CONCURRENCY = 4;
 // Comfortably under Prisma's default connection pool, so a large import cannot
 // starve the requests running alongside it.
 const ACCOUNT_INSERT_CONCURRENCY = 5;
+// Firing a whole roster at the mail provider at once is a good way to get
+// rate-limited, which shows up as accounts nobody can log into.
+const MAIL_SEND_CONCURRENCY = 5;
 
 const byRowNumber = (a: BulkImportRowResult, b: BulkImportRowResult) =>
   a.row - b.row;
@@ -276,8 +288,12 @@ export class UsersService {
     );
 
     const created: BulkImportRowResult[] = [];
-    const pendingEmails: Parameters<MailService['sendAccountCreated']>[0][] =
-      [];
+    // Each entry holds the very object pushed into `created`, so recording the
+    // delivery outcome later survives the sort below.
+    const pendingEmails: {
+      result: BulkImportRowResult;
+      payload: Parameters<MailService['sendAccountCreated']>[0];
+    }[] = [];
 
     // Each row keeps its own transaction, so one bad row still cannot roll
     // back the rest of the roster.
@@ -300,26 +316,33 @@ export class UsersService {
           return;
         }
 
-        created.push({
+        const result: BulkImportRowResult = {
           row: row.rowNumber,
           email: row.data.email,
           role: row.data.role,
-        });
+        };
+        created.push(result);
         pendingEmails.push({
-          to: row.data.email,
-          fullName: row.data.fullName,
-          tempPassword: row.tempPassword,
-          role: row.data.role,
+          result,
+          payload: {
+            to: row.data.email,
+            fullName: row.data.fullName,
+            tempPassword: row.tempPassword,
+            role: row.data.role,
+          },
         });
       },
     );
 
-    // Best-effort concurrent delivery — a failed send never fails the import,
-    // MailService already swallows and logs its own errors.
-    await Promise.allSettled(
-      pendingEmails.map((payload) =>
-        this.mailService.sendAccountCreated(payload),
-      ),
+    // Delivery stays best-effort — a failed send never fails the import — but
+    // the temp password exists nowhere else, so swallowing the failure strands
+    // an account nobody can reach. Record it per row instead.
+    await mapWithConcurrency(
+      pendingEmails,
+      MAIL_SEND_CONCURRENCY,
+      async ({ result, payload }) => {
+        result.emailSent = await this.mailService.sendAccountCreated(payload);
+      },
     );
 
     // Rows finish out of order once inserts run concurrently, but the admin
@@ -332,6 +355,7 @@ export class UsersService {
       total: rows.length,
       createdCount: created.length,
       failedCount: failed.length,
+      emailsFailedCount: created.filter((row) => !row.emailSent).length,
       created,
       failed,
     };

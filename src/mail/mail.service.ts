@@ -52,8 +52,9 @@ export class MailService {
     );
   }
 
-  async sendAccountCreated(payload: CredentialsEmailPayload): Promise<void> {
-    await this.sendCredentialsEmail({
+  /** Resolves false when delivery failed; never throws. */
+  async sendAccountCreated(payload: CredentialsEmailPayload): Promise<boolean> {
+    return this.sendCredentialsEmail({
       payload,
       subject: '[ProBase] Tài khoản của bạn đã được tạo',
       introText: `Tài khoản <strong>${ROLE_LABELS[payload.role]}</strong> của bạn trên hệ thống ProBase đã được tạo.`,
@@ -61,8 +62,9 @@ export class MailService {
     });
   }
 
-  async sendPasswordReset(payload: CredentialsEmailPayload): Promise<void> {
-    await this.sendCredentialsEmail({
+  /** Resolves false when delivery failed; never throws. */
+  async sendPasswordReset(payload: CredentialsEmailPayload): Promise<boolean> {
+    return this.sendCredentialsEmail({
       payload,
       subject: '[ProBase] Mật khẩu của bạn đã được đặt lại',
       introText:
@@ -76,7 +78,7 @@ export class MailService {
     subject: string;
     introText: string;
     logLabel: string;
-  }): Promise<void> {
+  }): Promise<boolean> {
     const { payload, subject, introText, logLabel } = args;
     const { to, fullName, tempPassword } = payload;
 
@@ -93,12 +95,16 @@ export class MailService {
         }),
       });
       this.logger.log(`${logLabel} email sent to ${to}`);
+      return true;
     } catch (err) {
-      // Do NOT throw — email failure must not break the calling flow
+      // Do NOT throw — email failure must not break the calling flow. The
+      // boolean is what lets a caller report the failure instead of assuming
+      // the credentials arrived.
       this.logger.error(
         `Failed to send ${logLabel.toLowerCase()} email to ${to}`,
         err,
       );
+      return false;
     }
   }
 
