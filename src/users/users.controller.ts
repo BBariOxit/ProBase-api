@@ -18,8 +18,10 @@ import {
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
+import { ZodValidationPipe } from 'nestjs-zod';
 import { Roles } from '../auth/decorators/roles.decorator';
-import { CreateUserDto } from './dto/create-user.dto';
+import { CreateUserSchema } from './dto/create-user.dto';
+import type { CreateUserDto } from './dto/create-user.dto';
 import { QueryUsersDto } from './dto/query-users.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { UpsertLecturerProfileDto } from './dto/upsert-lecturer-profile.dto';
@@ -43,8 +45,10 @@ export class UsersController {
     return this.usersService.findOne(id);
   }
 
+  // Body shape depends on `role`, so validation goes through the union schema
+  // directly rather than the global pipe's DTO-class lookup.
   @Post()
-  create(@Body() dto: CreateUserDto) {
+  create(@Body(new ZodValidationPipe(CreateUserSchema)) dto: CreateUserDto) {
     return this.usersService.create(dto);
   }
 

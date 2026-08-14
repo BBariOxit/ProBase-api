@@ -156,18 +156,22 @@ export class UsersService {
     const tempPassword = this.generateTempPassword();
     const passwordHash = await bcrypt.hash(tempPassword, 10);
 
-    const user = await this.prisma.user.create({
-      data: {
-        email: dto.email,
-        password: passwordHash,
-        role: dto.role,
-        mustChangePassword: true,
+    const user = await this.createAccountWithProfile(dto, passwordHash).catch(
+      (err) => {
+        if (
+          err instanceof Prisma.PrismaClientKnownRequestError &&
+          err.code === 'P2002'
+        ) {
+          const codeLabel = dto.role === 'STUDENT' ? 'Student' : 'Lecturer';
+          throw new ConflictException(`${codeLabel} code is already in use`);
+        }
+        throw err;
       },
-      select: USER_SELECT,
-    });
+    );
 
     await this.mailService.sendAccountCreated({
       to: user.email,
+      fullName: dto.role === 'ADMIN' ? undefined : dto.fullName,
       tempPassword,
       role: user.role,
     });
@@ -461,6 +465,54 @@ export class UsersService {
   }
 
   // ── Private helpers ──────────────────────────────────────
+
+  /**
+   * Writes the account and its role profile together, so a failed profile
+   * insert can never leave a bare, unusable User behind.
+   */
+  private createAccountWithProfile(dto: CreateUserDto, passwordHash: string) {
+    return this.prisma.$transaction(async (tx) => {
+      const user = await tx.user.create({
+        data: {
+          email: dto.email,
+          password: passwordHash,
+          role: dto.role,
+          mustChangePassword: true,
+        },
+        select: USER_SELECT,
+      });
+
+      if (dto.role === 'STUDENT') {
+        await tx.studentProfile.create({
+          data: {
+            userId: user.id,
+            studentCode: dto.studentCode,
+            fullName: dto.fullName,
+            majorId: dto.majorId,
+            class: dto.class,
+            cohort: dto.cohort,
+            phone: dto.phone,
+            bio: dto.bio,
+          },
+        });
+      } else if (dto.role === 'LECTURER') {
+        await tx.lecturerProfile.create({
+          data: {
+            userId: user.id,
+            lecturerCode: dto.lecturerCode,
+            fullName: dto.fullName,
+            departmentId: dto.departmentId,
+            academicTitle: dto.academicTitle,
+            researchInterests: dto.researchInterests,
+            phone: dto.phone,
+            bio: dto.bio,
+          },
+        });
+      }
+
+      return user;
+    });
+  }
 
   private generateTempPassword(): string {
     return Array.from(

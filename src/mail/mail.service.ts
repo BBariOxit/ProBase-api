@@ -6,7 +6,7 @@ export type MailableRole = 'ADMIN' | 'LECTURER' | 'STUDENT';
 
 export interface CredentialsEmailPayload {
   to: string;
-  fullName?: string; // Falls back to email when the profile hasn't been created yet
+  fullName?: string; // Absent only for ADMIN accounts, which have no profile
   tempPassword: string;
   role: MailableRole;
 }
@@ -71,7 +71,11 @@ export class MailService {
         to: [{ email: to, name: fullName ?? to }],
         subject,
         htmlContent: this.buildTemplate({
-          fullName: fullName ?? to,
+          // Only ADMIN accounts have no profile name — greet them without one
+          // rather than echoing their raw email address back at them.
+          greeting: fullName
+            ? `Xin chào <strong>${fullName}</strong>,`
+            : 'Xin chào,',
           email: to,
           tempPassword,
           introText,
@@ -88,7 +92,7 @@ export class MailService {
   }
 
   private buildTemplate(data: {
-    fullName: string;
+    greeting: string;
     email: string;
     tempPassword: string;
     introText: string;
@@ -107,7 +111,7 @@ export class MailService {
         </tr>
         <tr>
           <td style="padding:40px;">
-            <p style="font-size:16px;color:#1a2b3c;">Xin chào <strong>${data.fullName}</strong>,</p>
+            <p style="font-size:16px;color:#1a2b3c;">${data.greeting}</p>
             <p style="font-size:14px;color:#4a5568;line-height:1.7;">${data.introText}</p>
             <table width="100%" style="background:#f0f7ff;border:1px solid #c2dcf5;border-radius:8px;margin:20px 0;">
               <tr><td style="padding:24px;">
