@@ -2,12 +2,20 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { BrevoClient } from '@getbrevo/brevo';
 
-export interface AccountCreatedPayload {
+export type MailableRole = 'ADMIN' | 'LECTURER' | 'STUDENT';
+
+export interface CredentialsEmailPayload {
   to: string;
-  fullName: string;
+  fullName?: string; // Falls back to email when the profile hasn't been created yet
   tempPassword: string;
-  role: 'STUDENT' | 'LECTURER';
+  role: MailableRole;
 }
+
+const ROLE_LABELS: Record<MailableRole, string> = {
+  ADMIN: 'Quản trị viên',
+  LECTURER: 'Giảng viên',
+  STUDENT: 'Sinh viên',
+};
 
 @Injectable()
 export class MailService {
@@ -29,26 +37,53 @@ export class MailService {
     );
   }
 
-  async sendAccountCreated(payload: AccountCreatedPayload): Promise<void> {
-    const { to, fullName, tempPassword, role } = payload;
-    const roleLabel = role === 'STUDENT' ? 'Sinh viên' : 'Giảng viên';
+  async sendAccountCreated(payload: CredentialsEmailPayload): Promise<void> {
+    await this.sendCredentialsEmail({
+      payload,
+      subject: '[ProBase] Tài khoản của bạn đã được tạo',
+      introText: `Tài khoản <strong>${ROLE_LABELS[payload.role]}</strong> của bạn trên hệ thống ProBase đã được tạo.`,
+      logLabel: 'Account-created',
+    });
+  }
+
+  async sendPasswordReset(payload: CredentialsEmailPayload): Promise<void> {
+    await this.sendCredentialsEmail({
+      payload,
+      subject: '[ProBase] Mật khẩu của bạn đã được đặt lại',
+      introText:
+        'Mật khẩu tài khoản của bạn trên hệ thống ProBase vừa được quản trị viên đặt lại.',
+      logLabel: 'Password-reset',
+    });
+  }
+
+  private async sendCredentialsEmail(args: {
+    payload: CredentialsEmailPayload;
+    subject: string;
+    introText: string;
+    logLabel: string;
+  }): Promise<void> {
+    const { payload, subject, introText, logLabel } = args;
+    const { to, fullName, tempPassword } = payload;
 
     try {
       await this.client.transactionalEmails.sendTransacEmail({
         sender: { email: this.senderEmail, name: this.senderName },
-        to: [{ email: to, name: fullName }],
-        subject: '[ProBase] Tài khoản của bạn đã được tạo',
+        to: [{ email: to, name: fullName ?? to }],
+        subject,
         htmlContent: this.buildTemplate({
-          fullName,
+          fullName: fullName ?? to,
           email: to,
           tempPassword,
-          roleLabel,
+          introText,
         }),
       });
-      this.logger.log(`Account-created email sent to ${to}`);
+      this.logger.log(`${logLabel} email sent to ${to}`);
     } catch (err) {
-      // Do NOT throw — email failure must not break the import flow
-      this.logger.error(`Failed to send email to ${to}`, err);
+      // Do NOT throw — email failure must not break the calling flow
+      this.logger.error(
+        `Failed to send ${logLabel.toLowerCase()} email to ${to}`,
+        err,
+      );
     }
   }
 
@@ -56,7 +91,7 @@ export class MailService {
     fullName: string;
     email: string;
     tempPassword: string;
-    roleLabel: string;
+    introText: string;
   }): string {
     return `<!DOCTYPE html>
 <html lang="vi">
@@ -74,7 +109,7 @@ export class MailService {
         <tr>
           <td style="padding:40px;">
             <p style="font-size:16px;color:#1a2b3c;">Xin chào <strong>${data.fullName}</strong>,</p>
-            <p style="font-size:14px;color:#4a5568;line-height:1.7;">Tài khoản <strong>${data.roleLabel}</strong> của bạn trên hệ thống ProBase đã được tạo.</p>
+            <p style="font-size:14px;color:#4a5568;line-height:1.7;">${data.introText}</p>
             <table width="100%" style="background:#f0f7ff;border:1px solid #c2dcf5;border-radius:8px;margin:20px 0;">
               <tr><td style="padding:24px;">
                 <p style="margin:0 0 8px;font-size:13px;"><strong>Email:</strong> ${data.email}</p>
