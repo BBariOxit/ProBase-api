@@ -4,6 +4,8 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
+import { randomInt } from 'crypto';
+import { MailService } from '../mail/mail.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { QueryUsersDto } from './dto/query-users.dto';
@@ -22,9 +24,17 @@ const USER_SELECT = {
   updatedAt: true,
 } as const;
 
+// Excludes visually ambiguous characters (0/O, 1/l/I)
+const TEMP_PASSWORD_CHARSET =
+  'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
+const TEMP_PASSWORD_LENGTH = 12;
+
 @Injectable()
 export class UsersService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly mailService: MailService,
+  ) {}
 
   // ── findAll ──────────────────────────────────────────────
 
@@ -119,16 +129,28 @@ export class UsersService {
     });
     if (existing) throw new ConflictException('Email already in use');
 
-    const passwordHash = await bcrypt.hash(dto.password, 10);
+    // Admin never sets the password directly — a temp password is generated
+    // and delivered by email; the user must change it on first login.
+    const tempPassword = this.generateTempPassword();
+    const passwordHash = await bcrypt.hash(tempPassword, 10);
 
-    return this.prisma.user.create({
+    const user = await this.prisma.user.create({
       data: {
         email: dto.email,
         password: passwordHash,
         role: dto.role,
+        mustChangePassword: true,
       },
       select: USER_SELECT,
     });
+
+    await this.mailService.sendAccountCreated({
+      to: user.email,
+      tempPassword,
+      role: user.role,
+    });
+
+    return user;
   }
 
   // ── update ────────────────────────────────────────────────
@@ -235,5 +257,14 @@ export class UsersService {
       create: { userId: id, ...dto },
       update: dto,
     });
+  }
+
+  // ── Private helpers ──────────────────────────────────────
+
+  private generateTempPassword(): string {
+    return Array.from(
+      { length: TEMP_PASSWORD_LENGTH },
+      () => TEMP_PASSWORD_CHARSET[randomInt(TEMP_PASSWORD_CHARSET.length)],
+    ).join('');
   }
 }
