@@ -2,9 +2,9 @@ import { z } from 'zod';
 import { emailSchema } from '../../common/email.schema';
 
 // Expected spreadsheet columns (header names, case-insensitive):
-// email, role, fullName, code, majorCode (STUDENT), departmentCode (LECTURER),
-// class, cohort (STUDENT-only, optional), academicTitle, researchInterests
-// (LECTURER-only, optional), phone, bio (optional, both roles).
+// email, role, fullName, code, majorCode (STUDENT), class, cohort (STUDENT-only,
+// optional), academicTitle, researchInterests (LECTURER-only, optional),
+// phone, bio (optional, both roles).
 
 const StudentImportRowSchema = z.object({
   role: z.literal('STUDENT'),
@@ -26,10 +26,6 @@ const LecturerImportRowSchema = z.object({
   email: emailSchema,
   fullName: z.string().min(1, 'fullName is required').max(255),
   code: z.string().min(1, 'code is required').max(50),
-  departmentCode: z
-    .string()
-    .min(1, 'departmentCode is required for LECTURER rows')
-    .max(50),
   academicTitle: z.string().max(100).optional(),
   researchInterests: z.string().max(1000).optional(),
   phone: z.string().max(20).optional(),
@@ -56,7 +52,6 @@ export function toImportRowInput(raw: Record<string, string>): unknown {
     fullName: asOptional(raw.fullname),
     code: asOptional(raw.code),
     majorCode: asOptional(raw.majorcode),
-    departmentCode: asOptional(raw.departmentcode),
     class: asOptional(raw.class),
     cohort: asOptional(raw.cohort),
     academicTitle: asOptional(raw.academictitle),

@@ -33,7 +33,6 @@ const LecturerCreateSchema = z.object({
   email: emailSchema,
   lecturerCode: requiredTrimmed(50, 'Lecturer code is required'),
   fullName: requiredTrimmed(255, 'Full name is required'),
-  departmentId: z.number().int().positive().optional(),
   academicTitle: trimmed(100).optional(),
   researchInterests: trimmed(1000).optional(),
   phone: trimmed(20).optional(),

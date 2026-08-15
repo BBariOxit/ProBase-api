@@ -21,6 +21,8 @@ Yêu cầu chức năng được phân tách rõ ràng theo từng nhóm đối 
   - Chọn đề tài và đăng ký tham gia cá nhân (tự động tạo nhóm 1 người).
   - Tạo nhóm, mời thêm thành viên, đợi đồng ý rồi trưởng nhóm nộp đăng ký để GV duyệt.
   - Hủy đăng ký (chỉ được phép khi nhóm chưa ở trạng thái APPROVED và còn trong thời hạn đăng ký).
+  - **Mỗi học kỳ một sinh viên chỉ tham gia được một nhóm.** Được mời vào nhiều nhóm là bình thường, nhưng chấp nhận (ACCEPTED) lời mời thứ hai trong cùng học kỳ sẽ bị từ chối ở tầng database (partial unique index), không phụ thuộc vào kiểm tra ở tầng ứng dụng.
+  - **Mỗi đề tài chỉ có một nhóm được duyệt.** Nhiều nhóm được phép SUBMIT vào cùng một đề tài để GV lựa chọn, nhưng chỉ một nhóm đạt trạng thái APPROVED — cũng do database bảo đảm.
 - **FR_STU_04 - Tự đề xuất đề tài:**
   - Nhập thông tin đề xuất đề tài mới (Tên, Mô tả, Mục tiêu).
   - Chỉ định một Giảng viên mong muốn hướng dẫn hoặc gửi công khai (không chỉ định).
@@ -32,6 +34,7 @@ Yêu cầu chức năng được phân tách rõ ràng theo từng nhóm đối 
   - Hỗ trợ nộp nhiều lần (versioning — theo dõi bằng trường `version`) trước khi hết hạn deadline.
 - **FR_STU_07 - Tra cứu kết quả:**
   - Xem điểm số cá nhân: Điểm hướng dẫn (`mentor_grade`), Điểm phản biện (`reviewer_grade`), Điểm hội đồng (`council_grade`) — tất cả đều được chấm **riêng theo từng sinh viên**.
+  - Điểm tổng kết (`final_grade`) tính theo trọng số của học kỳ (`mentor_weight`, `reviewer_weight`, `council_weight` trong bảng `semesters`) và được **chốt cứng** kèm `finalised_at` khi hết hạn chốt điểm. Bảng điểm đã công bố không thay đổi nếu kỳ sau khoa chỉnh lại trọng số.
   - Xem nhận xét, đánh giá từ giảng viên.
   - Xem lịch trình, địa điểm và thời gian bảo vệ đồ án.
 
@@ -64,7 +67,7 @@ Yêu cầu chức năng được phân tách rõ ràng theo từng nhóm đối 
   - Nhập "Điểm hướng dẫn" riêng cho từng thành viên nhóm (`mentor_grade` trong bảng `registration_group_members`).
   - Điểm chỉ có thể nhập/sửa **trước deadline chốt điểm** (`grade_submission_deadline`) do Admin thiết lập cho từng học kỳ. Sau thời hạn này, điểm bị **khóa** và không thể chỉnh sửa.
 - **FR_LEC_06 - Đánh giá Phản biện / Hội đồng:**
-  - Nếu được phân công làm **GV phản biện** (`reviewer_id` trong `council_topics`): Xem báo cáo của nhóm được phân công, nhập **"Điểm phản biện" riêng cho từng thành viên** (`reviewer_grade` trong bảng `council_topic_grades`).
+  - Nếu được phân công làm **GV phản biện**: Xem báo cáo của nhóm được phân công, nhập **"Điểm phản biện" riêng cho từng thành viên** (`reviewer_grade` trong bảng `council_topic_grades`). Phản biện được phân theo **từng đề tài** qua `council_topics.reviewer_id` — đây là nơi duy nhất xác định vai trò này, `council_members.council_role` không còn giá trị REVIEWER.
   - Nếu nằm trong **hội đồng**: Xem danh sách nhóm bảo vệ trong phiên của mình, nhập **"Điểm hội đồng" riêng cho từng thành viên** (`council_grade` trong bảng `council_topic_grades`).
 
 #### 1.2.1. Nhóm đăng ký (Group Registration)
@@ -77,14 +80,13 @@ Yêu cầu chức năng được phân tách rõ ràng theo từng nhóm đối 
 ### 1.3. Đối với Quản trị viên (Admin / Giáo vụ Khoa)
 
 - **FR_ADM_01 - Quản lý Người dùng:**
-  - Thêm, sửa, xóa, khóa (deactivate) tài khoản của Giảng viên, Sinh viên.
+  - Thêm, sửa, khóa/mở khóa (deactivate) tài khoản của Giảng viên, Sinh viên. **Không xóa cứng**: `audit_logs` giữ lịch sử thao tác nhạy cảm bằng khóa ngoại RESTRICT, và sinh viên đã vào nhóm cũng bị RESTRICT giữ lại — xóa cứng vừa thất bại về mặt kỹ thuật, vừa xóa mất chính dấu vết cần lưu. `DELETE /users/:id` thực hiện khóa tài khoản và thu hồi toàn bộ refresh token.
   - Import danh sách tài khoản hàng loạt bằng file Excel (.csv, .xlsx).
   - **Reset mật khẩu** cho Giảng viên/Sinh viên: Admin đặt lại về mật khẩu tạm thời, người dùng buộc phải đổi mật khẩu khi đăng nhập lần đầu sau reset.
 - **FR_ADM_02 - Quản lý Danh mục (Master Data):**
   - Quản lý Học kỳ (Mở học kỳ mới, thiết lập ngày bắt đầu/kết thúc).
   - Quản lý Loại đồ án (`project_types`).
-  - Quản lý Khoa/Bộ môn (`departments`): Thêm, sửa, xóa các khoa trong trường.
-  - Quản lý Chuyên ngành (`majors`): Thêm, sửa, xóa các chuyên ngành, mỗi chuyên ngành thuộc một Khoa/Bộ môn.
+  - Quản lý Chuyên ngành (`majors`): Thêm, sửa, xóa các chuyên ngành. Danh sách phẳng, **không phân cấp theo bộ môn** — toàn hệ thống phục vụ đúng một khoa (vai trò Admin là Giáo vụ Khoa) và không có quy tắc nghiệp vụ nào phụ thuộc vào bộ môn: sinh viên đăng ký được đề tài của bất kỳ giảng viên nào, giảng viên nào cũng nhận hướng dẫn được.
 - **FR_ADM_03 - Quản lý Quy trình & Đợt đăng ký:**
   - Thiết lập cửa sổ thời gian đăng ký đề tài theo học kỳ: `registration_start` và `registration_end` trong bảng `semesters`.
   - Hệ thống tự động khóa/mở chức năng đăng ký dựa trên mốc thời gian trên, không cần Admin can thiệp thủ công.
@@ -96,11 +98,12 @@ Yêu cầu chức năng được phân tách rõ ràng theo từng nhóm đối 
   - Chỉ định **GV Phản biện** (`reviewer_id`) cho từng đề tài trong hội đồng.
 - **FR_ADM_05 - Báo cáo & Thống kê:**
   - Xuất bảng điểm tổng kết (Excel/PDF).
-  - Xem biểu đồ thống kê: Tỷ lệ hoàn thành đồ án, Phân bổ số lượng SV theo từng bộ môn/giảng viên.
+  - Xem biểu đồ thống kê: Tỷ lệ hoàn thành đồ án, Phân bổ số lượng SV theo từng giảng viên hướng dẫn và theo chuyên ngành.
 
 ### 1.4. Yêu cầu Hệ thống (System Requirements)
 
 - **FR_SYS_01 - Thông báo (Notifications):**
+  - Mỗi thông báo mang một `type` (enum) và `target_id` trỏ tới bản ghi liên quan, để client lọc được theo loại và điều hướng được khi người dùng bấm vào.
   - Hệ thống tự động đẩy thông báo in-app (lưu vào bảng `notifications`) trong các trường hợp:
     - Đề xuất đề tài được duyệt / từ chối.
     - Được mời vào nhóm đăng ký / Nhóm đã được duyệt / Nhóm bị từ chối.

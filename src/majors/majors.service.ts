@@ -11,24 +11,17 @@ import { UpdateMajorDto } from './dto/update-major.dto';
 export class MajorsService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async findAll(departmentId?: number) {
+  async findAll() {
     return this.prisma.major.findMany({
-      where: departmentId ? { departmentId } : undefined,
       orderBy: { name: 'asc' },
-      include: {
-        department: { select: { id: true, name: true, code: true } },
-        _count: { select: { students: true } },
-      },
+      include: { _count: { select: { students: true } } },
     });
   }
 
   async findOne(id: number) {
     const major = await this.prisma.major.findUnique({
       where: { id },
-      include: {
-        department: { select: { id: true, name: true, code: true } },
-        _count: { select: { students: true } },
-      },
+      include: { _count: { select: { students: true } } },
     });
 
     if (!major) throw new NotFoundException('Major not found');
@@ -37,35 +30,21 @@ export class MajorsService {
   }
 
   async create(dto: CreateMajorDto) {
-    await this.ensureDepartmentExists(dto.departmentId);
     await this.checkDuplicateCode(dto.code);
 
     return this.prisma.major.create({
-      data: { name: dto.name, code: dto.code, departmentId: dto.departmentId },
-      include: {
-        department: { select: { id: true, name: true, code: true } },
-      },
+      data: { name: dto.name, code: dto.code },
     });
   }
 
   async update(id: number, dto: UpdateMajorDto) {
     await this.findOne(id);
 
-    if (dto.departmentId) {
-      await this.ensureDepartmentExists(dto.departmentId);
-    }
-
     if (dto.code) {
       await this.checkDuplicateCode(dto.code, id);
     }
 
-    return this.prisma.major.update({
-      where: { id },
-      data: dto,
-      include: {
-        department: { select: { id: true, name: true, code: true } },
-      },
-    });
+    return this.prisma.major.update({ where: { id }, data: dto });
   }
 
   async remove(id: number) {
@@ -81,13 +60,6 @@ export class MajorsService {
     }
 
     return this.prisma.major.delete({ where: { id } });
-  }
-
-  private async ensureDepartmentExists(departmentId: number) {
-    const department = await this.prisma.department.findUnique({
-      where: { id: departmentId },
-    });
-    if (!department) throw new NotFoundException('Department not found');
   }
 
   private async checkDuplicateCode(code: string, excludeId?: number) {

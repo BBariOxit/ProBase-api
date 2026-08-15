@@ -8,10 +8,6 @@ export const CreateMajorSchema = z.object({
     .min(1, 'Major code is required')
     .max(50)
     .transform((val) => val.toUpperCase()),
-  departmentId: z
-    .number()
-    .int()
-    .positive('Department ID must be a positive integer'),
 });
 
 export class CreateMajorDto extends createZodDto(CreateMajorSchema) {}

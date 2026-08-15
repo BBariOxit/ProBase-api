@@ -54,11 +54,26 @@ enum SubmissionType {
   SOURCE_CODE
 }
 
+// Note: there is deliberately no REVIEWER role here. The reviewer is assigned
+// per topic via CouncilTopic.reviewerId, which is the single source of truth —
+// a duplicate role here would let the two disagree.
 enum CouncilMemberRole {
   PRESIDENT
   SECRETARY
-  REVIEWER
   MEMBER
+}
+
+// One value per notification case in FR_SYS_01. Without this the client has
+// only free text and cannot route a click to the record the notice is about.
+enum NotificationType {
+  PROPOSAL_ACCEPTED
+  PROPOSAL_REJECTED
+  GROUP_INVITATION
+  GROUP_APPROVED
+  GROUP_REJECTED
+  SUBMISSION_FEEDBACK
+  GRADE_PUBLISHED
+  DEADLINE_REMINDER
 }
 
 // ─────────────────────────────────────────────────────────
@@ -111,7 +126,6 @@ model StudentProfile {
 model LecturerProfile {
   id               Int     @id @default(autoincrement())
   userId           Int     @unique
-  departmentId     Int?
   lecturerCode     String  @unique
   fullName         String
   academicTitle    String?
@@ -121,8 +135,7 @@ model LecturerProfile {
   maxMentoringQuota Int?   // Null = no limit
 
   // Relations
-  user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
-  department Department? @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   requestedProposals TopicProposal[] @relation("ProposalRequestedLecturer")
   acceptedProposals  TopicProposal[] @relation("ProposalAcceptedLecturer")
@@ -137,27 +150,17 @@ model LecturerProfile {
 // GROUP 2: MASTER DATA
 // ─────────────────────────────────────────────────────────
 
-model Department {
+// Chuyên ngành. There is deliberately no bộ môn (department) table above this:
+// the system serves one faculty, no business rule ever depended on the grouping,
+// and the single report that wanted it (SV per bộ môn) was dropped from scope.
+// A flat list of majors is the whole hierarchy.
+model Major {
   id   Int    @id @default(autoincrement())
   name String
   code String @unique
 
   // Relations
-  majors   Major[]
-  lecturers LecturerProfile[]
-
-  @@map("departments")
-}
-
-model Major {
-  id           Int    @id @default(autoincrement())
-  departmentId Int
-  name         String
-  code         String @unique
-
-  // Relations
-  department Department       @relation(fields: [departmentId], references: [id], onDelete: Restrict)
-  students   StudentProfile[]
+  students StudentProfile[]
 
   @@map("majors")
 }
@@ -172,6 +175,13 @@ model Semester {
   registrationEnd         DateTime  // Window closes for topic registration
   gradeSubmissionDeadline DateTime? // After this, grades are locked
   isActive                Boolean   @default(false)
+
+  // The final-grade formula is data, not code: a faculty that reweights
+  // mentor/reviewer/council between intakes must not silently recompute the
+  // grades of semesters already closed. Expected to sum to 1.
+  mentorWeight            Float     @default(0.4)
+  reviewerWeight          Float     @default(0.3)
+  councilWeight           Float     @default(0.3)
 
   // Relations
   topics             Topic[]
@@ -254,6 +264,9 @@ model Topic {
   submissions        Submission[]
   councilTopic       CouncilTopic?
 
+  // Lets RegistrationGroup carry a denormalised semesterId that a composite
+  // foreign key pins to this topic's own semester, so the two cannot drift.
+  @@unique([id, semesterId])
   @@map("topics")
 }
 
@@ -268,8 +281,9 @@ model RegistrationGroup {
   createdAt       DateTime                @default(now())
   updatedAt       DateTime                @updatedAt
 
-  // Relations
-  topic     Topic          @relation(fields: [topicId], references: [id], onDelete: Restrict)
+  // The topic relation is composite: it carries semesterId too, so a group can
+  // never claim a semester its own topic does not belong to.
+  topic     Topic          @relation(fields: [topicId, semesterId], references: [id, semesterId], onDelete: Restrict)
   semester  Semester       @relation(fields: [semesterId], references: [id], onDelete: Restrict)
   leader    StudentProfile @relation(fields: [leaderId], references: [id], onDelete: Restrict)
 
@@ -277,12 +291,19 @@ model RegistrationGroup {
   submissions  Submission[]
   councilTopic CouncilTopic?
 
+  // Targets for the composite keys on members, submissions and council topics.
+  @@unique([id, topicId])
+  @@unique([id, semesterId])
   @@map("registration_groups")
 }
 
 model RegistrationGroupMember {
   id           Int               @id @default(autoincrement())
   groupId      Int
+  // Denormalised from the group purely so the "one accepted membership per
+  // student per semester" index below can exist — a unique index cannot span
+  // two tables. The composite foreign key keeps it honest.
+  semesterId   Int
   studentId    Int
   status       GroupMemberStatus @default(INVITED)
   mentorGrade  Float?            // Per-student grade from supervising lecturer
@@ -291,10 +312,14 @@ model RegistrationGroupMember {
   createdAt    DateTime          @default(now())
 
   // Relations
-  group   RegistrationGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  group   RegistrationGroup @relation(fields: [groupId, semesterId], references: [id, semesterId], onDelete: Cascade)
   student StudentProfile    @relation(fields: [studentId], references: [id], onDelete: Restrict)
 
   @@unique([groupId, studentId])
+  // A partial unique index in the migration adds the rule this cannot express:
+  // (studentId, semesterId) must be unique WHERE status = 'ACCEPTED'. A student
+  // may be INVITED to many groups but can join only one per semester.
+  @@index([studentId, semesterId])
   @@map("registration_group_members")
 }
 
@@ -315,10 +340,13 @@ model Submission {
   lecturerFeedback String?       @db.Text
   submittedAt     DateTime       @default(now())
 
-  // Relations
+  // Two constraints on purpose: `topic` keeps direct navigation and querying,
+  // while the composite `group` key pins topicId to the group's own topic so
+  // the denormalised column cannot drift away from it.
   topic Topic             @relation(fields: [topicId], references: [id], onDelete: Restrict)
-  group RegistrationGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  group RegistrationGroup @relation(fields: [groupId, topicId], references: [id, topicId], onDelete: Cascade)
 
+  @@index([topicId])
   @@map("submissions")
 }
 
@@ -367,11 +395,13 @@ model CouncilTopic {
   // Relations
   council  Council         @relation(fields: [councilId], references: [id], onDelete: Cascade)
   topic    Topic           @relation(fields: [topicId], references: [id], onDelete: Restrict)
-  group    RegistrationGroup @relation(fields: [groupId], references: [id], onDelete: Restrict)
+  // Composite: the defending group and the topic being defended must agree.
+  group    RegistrationGroup @relation(fields: [groupId, topicId], references: [id, topicId], onDelete: Restrict)
   reviewer LecturerProfile @relation(fields: [reviewerId], references: [id], onDelete: Restrict)
 
   grades CouncilTopicGrade[]
 
+  @@unique([groupId, topicId])
   @@map("council_topics")
 }
 
@@ -381,6 +411,10 @@ model CouncilTopicGrade {
   studentId      Int
   councilGrade   Float? // Grade from the full council panel
   reviewerGrade  Float? // Grade from the assigned reviewer
+  // Frozen when the semester's grade deadline passes, using that semester's
+  // weights. Stored rather than derived so a published transcript stays fixed.
+  finalGrade     Float?
+  finalisedAt    DateTime?
 
   // Relations
   councilTopic CouncilTopic   @relation(fields: [councilTopicId], references: [id], onDelete: Cascade)
@@ -395,16 +429,23 @@ model CouncilTopicGrade {
 // ─────────────────────────────────────────────────────────
 
 model Notification {
-  id        Int      @id @default(autoincrement())
+  id        Int              @id @default(autoincrement())
   userId    Int
+  type      NotificationType
   title     String
-  content   String   @db.Text
-  isRead    Boolean  @default(false)
-  createdAt DateTime @default(now())
+  content   String           @db.Text
+  // Primary key of the record this notice is about, paired with `type` to know
+  // which table it refers to. Lets the client deep-link instead of dead-ending
+  // on a line of text.
+  targetId  Int?
+  isRead    Boolean          @default(false)
+  createdAt DateTime         @default(now())
 
   // Relations
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  // The inbox is always read as "my unread, newest first".
+  @@index([userId, isRead, createdAt])
   @@map("notifications")
 }
 
