@@ -3,6 +3,7 @@ import { APP_GUARD } from '@nestjs/core';
 import { JwtModule } from '@nestjs/jwt';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { PassportModule } from '@nestjs/passport';
+import { MailModule } from '../mail/mail.module';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
@@ -12,12 +13,19 @@ import { JwtStrategy } from './strategies/jwt.strategy';
 @Module({
   imports: [
     PassportModule,
+    // Password reset both sends the link and warns the owner afterwards.
+    MailModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
       useFactory: (config: ConfigService) => ({
         secret: config.getOrThrow<string>('JWT_SECRET'),
-        signOptions: { expiresIn: config.get('JWT_EXPIRES_IN', '7d') },
+        // Minutes, not days. Access tokens are bearer credentials that are
+        // never checked against the database, so nothing can revoke one before
+        // it expires — a long-lived access token means logging out, or an admin
+        // deactivating an account, has no effect until it lapses. Keeping the
+        // window short is the entire reason the refresh token exists.
+        signOptions: { expiresIn: config.get('JWT_EXPIRES_IN', '15m') },
       }),
     }),
   ],
