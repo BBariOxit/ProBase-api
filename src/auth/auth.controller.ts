@@ -4,6 +4,7 @@ import {
   Get,
   HttpCode,
   HttpStatus,
+  Param,
   Patch,
   Post,
 } from '@nestjs/common';
@@ -12,8 +13,10 @@ import { AuthService } from './auth.service';
 import { GetUser } from './decorators/get-user.decorator';
 import { Public } from './decorators/public.decorator';
 import { ChangePasswordDto } from './dto/change-password.dto';
+import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { LoginDto } from './dto/login.dto';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
+import { ResetPasswordDto } from './dto/reset-password.dto';
 
 /**
  * Five attempts a minute per IP on anything that takes a credential.
@@ -47,6 +50,36 @@ export class AuthController {
   refresh(@Body() dto: RefreshTokenDto) {
     return this.authService.refreshTokens(dto.refreshToken);
   }
+
+  // ── Self-service password reset (FR_STU_01) ──────────────
+
+  // This one sends mail, so an unthrottled caller could flood a stranger's
+  // inbox and burn the provider quota at the same time.
+  @Public()
+  @Throttle(CREDENTIAL_RATE_LIMIT)
+  @Post('forgot-password')
+  @HttpCode(HttpStatus.OK)
+  forgotPassword(@Body() dto: ForgotPasswordDto) {
+    return this.authService.forgotPassword(dto);
+  }
+
+  // Read-only check so the client can say "link expired" on arrival instead of
+  // after the user has typed a new password twice.
+  @Public()
+  @Get('reset-password/:token')
+  checkResetToken(@Param('token') token: string) {
+    return this.authService.checkResetToken(token);
+  }
+
+  @Public()
+  @Throttle(CREDENTIAL_RATE_LIMIT)
+  @Post('reset-password')
+  @HttpCode(HttpStatus.OK)
+  resetPassword(@Body() dto: ResetPasswordDto) {
+    return this.authService.resetPassword(dto);
+  }
+
+  // ── Session ──────────────────────────────────────────────
 
   @Post('logout')
   @HttpCode(HttpStatus.OK)

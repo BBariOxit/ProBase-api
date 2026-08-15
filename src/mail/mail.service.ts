@@ -73,6 +73,98 @@ export class MailService {
     });
   }
 
+  /**
+   * The self-service reset link. Carries no password — only a one-time URL, so
+   * an intercepted message is useless once the link is spent or expires.
+   */
+  async sendPasswordResetLink(payload: {
+    to: string;
+    fullName?: string;
+    resetUrl: string;
+    expiresInMinutes: number;
+  }): Promise<boolean> {
+    return this.send({
+      to: payload.to,
+      fullName: payload.fullName,
+      subject: '[ProBase] Đặt lại mật khẩu',
+      logLabel: 'Password-reset-link',
+      html: this.renderShell({
+        fullName: payload.fullName,
+        introText:
+          'Chúng tôi nhận được yêu cầu đặt lại mật khẩu cho tài khoản của bạn.',
+        bodyHtml: `
+            <table width="100%" style="background:#fff8e1;border-left:4px solid #f59e0b;border-radius:4px;margin:20px 0 28px;">
+              <tr><td style="padding:14px 18px;font-size:13px;color:#78610a;">
+                Liên kết chỉ dùng được <strong>một lần</strong> và hết hạn sau <strong>${payload.expiresInMinutes} phút</strong>.
+                Nếu bạn không yêu cầu, hãy bỏ qua email này — mật khẩu hiện tại vẫn giữ nguyên.
+              </td></tr>
+            </table>
+            ${this.renderButton(payload.resetUrl, 'Đặt lại mật khẩu')}`,
+      }),
+    });
+  }
+
+  /**
+   * Sent after a password actually changes.
+   *
+   * Every other control tries to prevent an account takeover; this one makes
+   * sure the owner finds out about one. It is the only signal reaching someone
+   * whose account was reset by another person.
+   */
+  async sendPasswordChangedNotice(payload: {
+    to: string;
+    fullName?: string;
+    changedAt: Date;
+  }): Promise<boolean> {
+    const when = payload.changedAt.toLocaleString('vi-VN', {
+      timeZone: 'Asia/Ho_Chi_Minh',
+    });
+
+    return this.send({
+      to: payload.to,
+      fullName: payload.fullName,
+      subject: '[ProBase] Mật khẩu của bạn vừa được thay đổi',
+      logLabel: 'Password-changed-notice',
+      html: this.renderShell({
+        fullName: payload.fullName,
+        introText: `Mật khẩu tài khoản ProBase của bạn vừa được thay đổi lúc <strong>${escapeHtml(when)}</strong>.`,
+        bodyHtml: `
+            <table width="100%" style="background:#fdecea;border-left:4px solid #c0392b;border-radius:4px;margin:20px 0 28px;">
+              <tr><td style="padding:14px 18px;font-size:13px;color:#7b241c;">
+                Nếu <strong>không phải bạn</strong> thực hiện, hãy liên hệ giáo vụ khoa ngay để được khoá tài khoản.
+              </td></tr>
+            </table>
+            ${this.renderButton(`${this.frontendUrl}/login`, 'Đăng nhập')}`,
+      }),
+    });
+  }
+
+  /** Single delivery path: log the outcome, never throw. */
+  private async send(args: {
+    to: string;
+    fullName?: string;
+    subject: string;
+    logLabel: string;
+    html: string;
+  }): Promise<boolean> {
+    try {
+      await this.client.transactionalEmails.sendTransacEmail({
+        sender: { email: this.senderEmail, name: this.senderName },
+        to: [{ email: args.to, name: args.fullName ?? args.to }],
+        subject: args.subject,
+        htmlContent: args.html,
+      });
+      this.logger.log(`${args.logLabel} email sent to ${args.to}`);
+      return true;
+    } catch (err) {
+      this.logger.error(
+        `Failed to send ${args.logLabel.toLowerCase()} email to ${args.to}`,
+        err,
+      );
+      return false;
+    }
+  }
+
   private async sendCredentialsEmail(args: {
     payload: CredentialsEmailPayload;
     subject: string;
@@ -82,30 +174,20 @@ export class MailService {
     const { payload, subject, introText, logLabel } = args;
     const { to, fullName, tempPassword } = payload;
 
-    try {
-      await this.client.transactionalEmails.sendTransacEmail({
-        sender: { email: this.senderEmail, name: this.senderName },
-        to: [{ email: to, name: fullName ?? to }],
-        subject,
-        htmlContent: this.buildTemplate({
-          fullName,
-          email: to,
-          tempPassword,
-          introText,
-        }),
-      });
-      this.logger.log(`${logLabel} email sent to ${to}`);
-      return true;
-    } catch (err) {
-      // Do NOT throw — email failure must not break the calling flow. The
-      // boolean is what lets a caller report the failure instead of assuming
-      // the credentials arrived.
-      this.logger.error(
-        `Failed to send ${logLabel.toLowerCase()} email to ${to}`,
-        err,
-      );
-      return false;
-    }
+    // Delivery never throws; the boolean is what lets a caller report a failure
+    // instead of assuming the credentials arrived.
+    return this.send({
+      to,
+      fullName,
+      subject,
+      logLabel,
+      html: this.buildTemplate({
+        fullName,
+        email: to,
+        tempPassword,
+        introText,
+      }),
+    });
   }
 
   private buildTemplate(data: {
@@ -115,6 +197,43 @@ export class MailService {
     /** Built in this service from fixed copy — intentionally carries markup. */
     introText: string;
   }): string {
+    return this.renderShell({
+      fullName: data.fullName,
+      introText: data.introText,
+      bodyHtml: `
+            <table width="100%" style="background:#f0f7ff;border:1px solid #c2dcf5;border-radius:8px;margin:20px 0;">
+              <tr><td style="padding:24px;">
+                <p style="margin:0 0 8px;font-size:13px;"><strong>Email:</strong> ${escapeHtml(data.email)}</p>
+                <p style="margin:0;font-size:13px;"><strong>Mật khẩu tạm:</strong> <span style="font-family:monospace;color:#c0392b;font-size:15px;font-weight:700;">${escapeHtml(data.tempPassword)}</span></p>
+              </td></tr>
+            </table>
+            <table width="100%" style="background:#fff8e1;border-left:4px solid #f59e0b;border-radius:4px;margin-bottom:28px;">
+              <tr><td style="padding:14px 18px;font-size:13px;color:#78610a;">
+                ⚠️ Bạn sẽ được yêu cầu <strong>đổi mật khẩu ngay</strong> sau khi đăng nhập lần đầu.
+              </td></tr>
+            </table>
+            ${this.renderButton(`${this.frontendUrl}/login`, 'Đăng nhập ngay')}`,
+    });
+  }
+
+  private renderButton(href: string, label: string): string {
+    return `<table width="100%"><tr><td align="center">
+              <a href="${href}" style="display:inline-block;background:linear-gradient(135deg,#1e3a5f,#2e6da4);color:#fff;text-decoration:none;padding:14px 36px;border-radius:8px;font-size:15px;font-weight:600;">
+                ${label}
+              </a>
+            </td></tr></table>`;
+  }
+
+  /**
+   * The chrome every message shares. `bodyHtml` is markup this service builds
+   * itself; anything originating from a user must already have been escaped by
+   * the caller before it gets here.
+   */
+  private renderShell(data: {
+    fullName?: string;
+    introText: string;
+    bodyHtml: string;
+  }): string {
     // Only ADMIN accounts have no profile name — greet them without one
     // rather than echoing their raw email address back at them.
     const greeting = data.fullName
@@ -123,7 +242,7 @@ export class MailService {
 
     return `<!DOCTYPE html>
 <html lang="vi">
-<head><meta charset="UTF-8"/><title>Tài khoản ProBase</title></head>
+<head><meta charset="UTF-8"/><title>ProBase</title></head>
 <body style="margin:0;padding:0;background:#f4f6f9;font-family:'Segoe UI',Arial,sans-serif;">
   <table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f6f9;padding:40px 0;">
     <tr><td align="center">
@@ -137,22 +256,7 @@ export class MailService {
           <td style="padding:40px;">
             <p style="font-size:16px;color:#1a2b3c;">${greeting}</p>
             <p style="font-size:14px;color:#4a5568;line-height:1.7;">${data.introText}</p>
-            <table width="100%" style="background:#f0f7ff;border:1px solid #c2dcf5;border-radius:8px;margin:20px 0;">
-              <tr><td style="padding:24px;">
-                <p style="margin:0 0 8px;font-size:13px;"><strong>Email:</strong> ${escapeHtml(data.email)}</p>
-                <p style="margin:0;font-size:13px;"><strong>Mật khẩu tạm:</strong> <span style="font-family:monospace;color:#c0392b;font-size:15px;font-weight:700;">${escapeHtml(data.tempPassword)}</span></p>
-              </td></tr>
-            </table>
-            <table width="100%" style="background:#fff8e1;border-left:4px solid #f59e0b;border-radius:4px;margin-bottom:28px;">
-              <tr><td style="padding:14px 18px;font-size:13px;color:#78610a;">
-                ⚠️ Bạn sẽ được yêu cầu <strong>đổi mật khẩu ngay</strong> sau khi đăng nhập lần đầu.
-              </td></tr>
-            </table>
-            <table width="100%"><tr><td align="center">
-              <a href="${this.frontendUrl}/login" style="display:inline-block;background:linear-gradient(135deg,#1e3a5f,#2e6da4);color:#fff;text-decoration:none;padding:14px 36px;border-radius:8px;font-size:15px;font-weight:600;">
-                Đăng nhập ngay
-              </a>
-            </td></tr></table>
+            ${data.bodyHtml}
           </td>
         </tr>
         <tr>

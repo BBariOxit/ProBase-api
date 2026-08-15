@@ -96,6 +96,7 @@ model User {
   notifications   Notification[]
   auditLogs       AuditLog[]
   refreshTokens   RefreshToken[]
+  passwordResetTokens PasswordResetToken[]
 
   @@map("users")
 }
@@ -484,5 +485,33 @@ model RefreshToken {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("refresh_tokens")
+}
+
+/**
+ * A password-reset link is a credential: whoever holds it can take the account.
+ * So it is stored the way the refresh token is — only the SHA-256 hash, never
+ * the value that was emailed. A database leak then yields nothing usable.
+ *
+ * SHA-256 rather than bcrypt is deliberate. Bcrypt is slow on purpose, to make
+ * offline guessing of low-entropy secrets expensive; a 32-byte random token has
+ * 256 bits of entropy and no guessing surface at all, so the cost would buy
+ * nothing and be paid on every validation.
+ *
+ * Rows are deleted on use and superseded whenever a fresh link is requested, so
+ * "single use" and "one live link per account" are properties of the table
+ * rather than promises made by the service.
+ */
+model PasswordResetToken {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  tokenHash String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  // Relations
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("password_reset_tokens")
 }
 
