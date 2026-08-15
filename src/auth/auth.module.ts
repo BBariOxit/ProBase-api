@@ -8,6 +8,7 @@ import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { RolesGuard } from './guards/roles.guard';
+import { TempPasswordGuard } from './guards/temp-password.guard';
 import { JwtStrategy } from './strategies/jwt.strategy';
 
 @Module({
@@ -33,8 +34,13 @@ import { JwtStrategy } from './strategies/jwt.strategy';
   providers: [
     AuthService,
     JwtStrategy,
-    // Global guards — all routes require JWT auth unless marked @Public()
+    // Global guards, applied in this order — all routes require JWT auth
+    // unless marked @Public(). TempPasswordGuard sits ahead of RolesGuard on
+    // purpose: an account that has not finished its password change should be
+    // told that, rather than being handed a role error that sends whoever is
+    // debugging it looking in the wrong place.
     { provide: APP_GUARD, useClass: JwtAuthGuard },
+    { provide: APP_GUARD, useClass: TempPasswordGuard },
     { provide: APP_GUARD, useClass: RolesGuard },
   ],
 })
