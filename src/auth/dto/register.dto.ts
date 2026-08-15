@@ -1,10 +1,11 @@
 import { z } from 'zod';
 import { createZodDto } from 'nestjs-zod';
 import { emailSchema } from '../../common/email.schema';
+import { passwordSchema } from '../../common/password.schema';
 
 export const RegisterSchema = z.object({
   email: emailSchema,
-  password: z.string().min(6),
+  password: passwordSchema,
   role: z.enum(['STUDENT', 'LECTURER']),
 });
 
