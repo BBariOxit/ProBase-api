@@ -12,7 +12,6 @@ export const UpsertLecturerProfileSchema = z.object({
     .min(1, 'Full name is required')
     .max(255)
     .transform((val) => val.trim()),
-  departmentId: z.number().int().positive().optional().nullable(),
   academicTitle: z.string().max(100).optional().nullable(), // e.g. "TS.", "PGS.TS.", "GS.TS."
   phone: z.string().max(20).optional().nullable(),
   bio: z.string().max(2000).optional().nullable(),

@@ -9,7 +9,6 @@ export const UpdateMajorSchema = z.object({
     .max(50)
     .transform((val) => val.toUpperCase())
     .optional(),
-  departmentId: z.number().int().positive().optional(),
 });
 
 export class UpdateMajorDto extends createZodDto(UpdateMajorSchema) {}

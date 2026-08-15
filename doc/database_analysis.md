@@ -24,7 +24,7 @@ Hệ thống quản lý đồ án cho sinh viên Công nghệ Thông tin (bao g�
 ### 👨‍💻 Quản trị viên (Admin)
 
 - **Quản lý hệ thống**: Quản lý tài khoản, cấp quyền.
-- **Quản lý danh mục**: Quản lý đợt/học kỳ, loại đồ án (Cơ sở, Chuyên ngành, Tốt nghiệp), bộ môn, chuyên ngành.
+- **Quản lý danh mục**: Quản lý đợt/học kỳ, loại đồ án (Cơ sở, Chuyên ngành, Tốt nghiệp), chuyên ngành.
 - **Quản lý quy trình**: Mở/đóng đợt đăng ký, duyệt đề tài của giảng viên (nếu cần), phân công hội đồng bảo vệ.
 - **Báo cáo & Thống kê**: Thống kê số lượng sinh viên làm đồ án, tỉ lệ qua/trượt, danh sách điểm.
 
@@ -37,8 +37,9 @@ Hệ thống quản lý đồ án cho sinh viên Công nghệ Thông tin (bao g�
 - **`users`**: `id`, `email`, `password_hash`, `role` (ADMIN, LECTURER, STUDENT), `is_active`, `created_at`, `updated_at`.
 - **`student_profiles`**: `id`, `user_id` (FK), `student_code`, `full_name`, `class`, `major_id` (FK → `majors`), `cohort`, `phone`, `bio`.
   > _(cập nhật: thêm `phone`, `bio`, `major_id` FK thay cho string cứng; hỗ trợ FR_STU_01)_
-- **`lecturer_profiles`**: `id`, `user_id` (FK), `lecturer_code`, `full_name`, `department_id` (FK → `departments`), `academic_title`, `phone`, `bio`, `research_interests`, `max_mentoring_quota` (Int - Số nhóm tối đa được hướng dẫn trong một học kỳ, Nullable — nếu Null thì không giới hạn).
-  > _(cập nhật: thêm `phone`, `bio`, `research_interests`, `department_id` FK, `max_mentoring_quota`; hỗ trợ FR_LEC_01, FR_ADM_02)_
+- **`lecturer_profiles`**: `id`, `user_id` (FK), `lecturer_code`, `full_name`, `academic_title`, `phone`, `bio`, `research_interests`, `max_mentoring_quota` (Int - Số nhóm tối đa được hướng dẫn trong một học kỳ, Nullable — nếu Null thì không giới hạn).
+  > _(cập nhật: thêm `phone`, `bio`, `research_interests`, `max_mentoring_quota`; hỗ trợ FR_LEC_01)_
+  > _(cập nhật: **bỏ `department_id`** — xem ghi chú ở `majors` bên dưới. Giảng viên tìm theo `research_interests`, không theo đơn vị.)_
 
 ### Nhóm 2: Quản lý Danh mục (Master Data)
 
@@ -46,8 +47,8 @@ Hệ thống quản lý đồ án cho sinh viên Công nghệ Thông tin (bao g�
   > _(cập nhật: thêm `registration_start`, `registration_end`; hỗ trợ FR_ADM_03)_
   > _(cập nhật: thêm 3 trọng số điểm — công thức tính điểm tổng kết là **dữ liệu theo học kỳ**, không hardcode trong code, để đổi trọng số kỳ sau không tính lại điểm các kỳ đã đóng)_
 - **`project_types`**: `id`, `name`, `code`.
-- **`departments`**: `id`, `name`, `code`. — **Bộ môn trực thuộc khoa**, không phải khoa trong trường: toàn hệ thống phục vụ đúng một khoa (vai trò Admin là "Giáo vụ Khoa"). _(bảng mới; hỗ trợ FR_ADM_02)_
-- **`majors`**: `id`, `name`, `code`, `department_id` (FK → bộ môn phụ trách chuyên ngành). — _(bảng mới: tách riêng Chuyên ngành; hỗ trợ FR_ADM_02)_
+- **`majors`**: `id`, `name`, `code`. Danh sách chuyên ngành **phẳng**, không phân cấp. _(bảng mới: tách riêng Chuyên ngành; hỗ trợ FR_ADM_02)_
+  > _(cập nhật: **đã bỏ hẳn bảng `departments`** (bộ môn). Nó từng gom giảng viên và chuyên ngành thành nhóm, nhưng không một quy tắc nghiệp vụ nào đọc tới: đăng ký đề tài, đề xuất và chấm điểm đều mở trong toàn khoa — chính tài liệu này ghi "GV nào trong khoa cũng có thể nhận". Người dùng duy nhất của nó là báo cáo "SV theo bộ môn", đã đưa ra khỏi phạm vi. Giữ lại chỉ tạo thêm một cấp phân cấp phải bảo trì mà không đổi lấy được luật ràng buộc nào.)_
 
 ### Nhóm 3: Đề xuất Đề tài (Tính năng Sinh viên tự đề xuất)
 
@@ -138,9 +139,7 @@ erDiagram
     USER ||--o{ NOTIFICATION : "receives"
     USER ||--o{ AUDIT_LOG : "performs"
 
-    %% Master Data (Departments & Majors)
-    DEPARTMENT ||--o{ MAJOR : "has"
-    DEPARTMENT ||--o{ LECTURER_PROFILE : "belongs to"
+    %% Master Data (Majors)
     MAJOR ||--o{ STUDENT_PROFILE : "belongs to"
 
     %% Categories
@@ -178,14 +177,8 @@ erDiagram
     STUDENT_PROFILE ||--o{ COUNCIL_TOPIC_GRADE : "receives grade"
 
     %% Snapshot of Entity Attributes
-    DEPARTMENT {
-        int id PK
-        string name
-        string code
-    }
     MAJOR {
         int id PK
-        int department_id FK
         string name
         string code
     }
@@ -200,7 +193,6 @@ erDiagram
     LECTURER_PROFILE {
         int id PK
         int user_id FK
-        int department_id FK
         string phone
         string bio
         string research_interests

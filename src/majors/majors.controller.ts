@@ -7,7 +7,6 @@ import {
   ParseIntPipe,
   Patch,
   Post,
-  Query,
 } from '@nestjs/common';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { MajorsService } from './majors.service';
@@ -19,11 +18,8 @@ export class MajorsController {
   constructor(private readonly majorsService: MajorsService) {}
 
   @Get()
-  findAll(@Query('departmentId') departmentId?: string) {
-    const parsedId = departmentId ? parseInt(departmentId, 10) : undefined;
-    return this.majorsService.findAll(
-      parsedId && !isNaN(parsedId) ? parsedId : undefined,
-    );
+  findAll() {
+    return this.majorsService.findAll();
   }
 
   @Get(':id')

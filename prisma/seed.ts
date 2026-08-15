@@ -28,26 +28,14 @@ const DEMO_STUDENT_EMAIL = (
 const DEMO_STUDENT_PASSWORD =
   process.env.SEED_STUDENT_PASSWORD ?? 'Student@123';
 
-// The whole system serves one faculty (the admin role is "Giáo vụ Khoa"), so
-// `departments` are the bộ môn inside Khoa CNTT — not faculties of a
-// university. Swap these for your faculty's real divisions.
-const DEPARTMENTS = [
-  { code: 'CNPM', name: 'Bộ môn Công nghệ Phần mềm' },
-  { code: 'HTTT', name: 'Bộ môn Hệ thống Thông tin' },
-  { code: 'KHMT', name: 'Bộ môn Khoa học Máy tính' },
-  { code: 'MMT', name: 'Bộ môn Mạng máy tính và Truyền thông' },
-  { code: 'ATTT', name: 'Bộ môn An toàn Thông tin' },
-];
-
-// Chuyên ngành, each owned by one bộ môn. Codes only need to be unique within
-// their own table, so a chuyên ngành may share a code with its bộ môn.
+// Chuyên ngành — a flat list. Swap these for your faculty's real ones.
 const MAJORS = [
-  { code: 'KTPM', name: 'Kỹ thuật Phần mềm', department: 'CNPM' },
-  { code: 'HTTT', name: 'Hệ thống Thông tin', department: 'HTTT' },
-  { code: 'KHMT', name: 'Khoa học Máy tính', department: 'KHMT' },
-  { code: 'TTNT', name: 'Trí tuệ Nhân tạo', department: 'KHMT' },
-  { code: 'MMT', name: 'Mạng máy tính và Truyền thông', department: 'MMT' },
-  { code: 'ATTT', name: 'An toàn Thông tin', department: 'ATTT' },
+  { code: 'KTPM', name: 'Kỹ thuật Phần mềm' },
+  { code: 'HTTT', name: 'Hệ thống Thông tin' },
+  { code: 'KHMT', name: 'Khoa học Máy tính' },
+  { code: 'TTNT', name: 'Trí tuệ Nhân tạo' },
+  { code: 'MMT', name: 'Mạng máy tính và Truyền thông' },
+  { code: 'ATTT', name: 'An toàn Thông tin' },
 ];
 
 const PROJECT_TYPES = [
@@ -62,30 +50,13 @@ const daysFromNow = (n: number) => new Date(Date.now() + n * DAY_MS);
 async function main() {
   console.log('Seeding…');
 
-  // Master data first — majors need a department, and bulk import resolves
-  // majorCode/departmentCode against these tables.
-  const departmentIdByCode = new Map<string, number>();
-  for (const dept of DEPARTMENTS) {
-    const saved = await prisma.department.upsert({
-      where: { code: dept.code },
-      create: dept,
-      update: { name: dept.name },
-    });
-    departmentIdByCode.set(saved.code, saved.id);
-  }
-  console.log(`  departments: ${DEPARTMENTS.length}`);
-
+  // Master data first — bulk import resolves majorCode against this table.
   const majorIdByCode = new Map<string, number>();
   for (const major of MAJORS) {
-    const departmentId = departmentIdByCode.get(major.department);
-    if (departmentId === undefined) {
-      throw new Error(`Major ${major.code} references unknown department`);
-    }
-
     const saved = await prisma.major.upsert({
       where: { code: major.code },
-      create: { code: major.code, name: major.name, departmentId },
-      update: { name: major.name, departmentId },
+      create: major,
+      update: { name: major.name },
     });
     majorIdByCode.set(saved.code, saved.id);
   }

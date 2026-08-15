@@ -126,7 +126,6 @@ model StudentProfile {
 model LecturerProfile {
   id               Int     @id @default(autoincrement())
   userId           Int     @unique
-  departmentId     Int?
   lecturerCode     String  @unique
   fullName         String
   academicTitle    String?
@@ -136,8 +135,7 @@ model LecturerProfile {
   maxMentoringQuota Int?   // Null = no limit
 
   // Relations
-  user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
-  department Department? @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   requestedProposals TopicProposal[] @relation("ProposalRequestedLecturer")
   acceptedProposals  TopicProposal[] @relation("ProposalAcceptedLecturer")
@@ -152,27 +150,17 @@ model LecturerProfile {
 // GROUP 2: MASTER DATA
 // ─────────────────────────────────────────────────────────
 
-model Department {
+// Chuyên ngành. There is deliberately no bộ môn (department) table above this:
+// the system serves one faculty, no business rule ever depended on the grouping,
+// and the single report that wanted it (SV per bộ môn) was dropped from scope.
+// A flat list of majors is the whole hierarchy.
+model Major {
   id   Int    @id @default(autoincrement())
   name String
   code String @unique
 
   // Relations
-  majors   Major[]
-  lecturers LecturerProfile[]
-
-  @@map("departments")
-}
-
-model Major {
-  id           Int    @id @default(autoincrement())
-  departmentId Int
-  name         String
-  code         String @unique
-
-  // Relations
-  department Department       @relation(fields: [departmentId], references: [id], onDelete: Restrict)
-  students   StudentProfile[]
+  students StudentProfile[]
 
   @@map("majors")
 }

@@ -24,11 +24,13 @@ import type { ImportRow } from './import/import-row.schema';
 import { parseImportFile } from './import/parse-import-file.util';
 import type { ParsedImportRow } from './import/parse-import-file.util';
 
-/** A row that passed validation and resolved its major/department. */
+/** A row that passed validation and resolved its major, if it needed one. */
 interface ValidatedImportRow {
   rowNumber: number;
   data: ImportRow;
-  relationId: number;
+  /** Resolved from majorCode on STUDENT rows; absent on LECTURER rows, which
+   *  have no master-data relation to resolve. */
+  majorId?: number;
 }
 
 /** A validated row that also has its generated credentials ready to insert. */
@@ -268,7 +270,7 @@ export class UsersService {
     failed.push(...validated.failed);
 
     // One query covering every address in the file, instead of one findUnique
-    // per row — the same prefetch shape already used for major/department.
+    // per row — the same prefetch shape already used for majors.
     const usable = await this.rejectTakenEmails(validated.valid);
     failed.push(...usable.failed);
 
@@ -537,7 +539,6 @@ export class UsersService {
             userId: user.id,
             lecturerCode: dto.lecturerCode,
             fullName: dto.fullName,
-            departmentId: dto.departmentId,
             academicTitle: dto.academicTitle,
             researchInterests: dto.researchInterests,
             phone: dto.phone,
@@ -551,19 +552,17 @@ export class UsersService {
   }
 
   /**
-   * Validates and de-duplicates every row against one prefetch of the major
-   * and department tables. Pure CPU work beyond that single prefetch.
+   * Validates and de-duplicates every row against one prefetch of the majors
+   * table. Pure CPU work beyond that single prefetch.
    */
   private async validateImportRows(rows: ParsedImportRow[]): Promise<{
     valid: ValidatedImportRow[];
     failed: BulkImportRowResult[];
   }> {
-    const [majors, departments] = await Promise.all([
-      this.prisma.major.findMany({ select: { id: true, code: true } }),
-      this.prisma.department.findMany({ select: { id: true, code: true } }),
-    ]);
+    const majors = await this.prisma.major.findMany({
+      select: { id: true, code: true },
+    });
     const majorIdByCode = new Map(majors.map((m) => [m.code, m.id]));
-    const departmentIdByCode = new Map(departments.map((d) => [d.code, d.id]));
 
     const valid: ValidatedImportRow[] = [];
     const failed: BulkImportRowResult[] = [];
@@ -607,25 +606,22 @@ export class UsersService {
       }
       codesSeenInFile.add(codeKey);
 
-      const relationId =
-        data.role === 'STUDENT'
-          ? majorIdByCode.get(data.majorCode)
-          : departmentIdByCode.get(data.departmentCode);
-
-      if (relationId === undefined) {
-        const codeLabel =
-          data.role === 'STUDENT' ? 'majorCode' : 'departmentCode';
-        const codeValue =
-          data.role === 'STUDENT' ? data.majorCode : data.departmentCode;
-        failed.push({
-          row: raw.rowNumber,
-          email: data.email,
-          reason: `${codeLabel} "${codeValue}" not found`,
-        });
-        continue;
+      // Only students carry a master-data reference; a lecturer row is
+      // self-contained now that bộ môn is gone.
+      let majorId: number | undefined;
+      if (data.role === 'STUDENT') {
+        majorId = majorIdByCode.get(data.majorCode);
+        if (majorId === undefined) {
+          failed.push({
+            row: raw.rowNumber,
+            email: data.email,
+            reason: `majorCode "${data.majorCode}" not found`,
+          });
+          continue;
+        }
       }
 
-      valid.push({ rowNumber: raw.rowNumber, data, relationId });
+      valid.push({ rowNumber: raw.rowNumber, data, majorId });
     }
 
     return { valid, failed };
@@ -664,7 +660,7 @@ export class UsersService {
 
   /** Writes one imported account and its role profile atomically. */
   private insertAccount(row: PreparedImportRow) {
-    const { data, relationId, passwordHash } = row;
+    const { data, majorId, passwordHash } = row;
 
     return this.prisma.$transaction(async (tx) => {
       const user = await tx.user.create({
@@ -682,7 +678,7 @@ export class UsersService {
             userId: user.id,
             studentCode: data.code,
             fullName: data.fullName,
-            majorId: relationId,
+            majorId,
             class: data.class,
             cohort: data.cohort,
             phone: data.phone,
@@ -695,7 +691,6 @@ export class UsersService {
             userId: user.id,
             lecturerCode: data.code,
             fullName: data.fullName,
-            departmentId: relationId,
             academicTitle: data.academicTitle,
             phone: data.phone,
             bio: data.bio,

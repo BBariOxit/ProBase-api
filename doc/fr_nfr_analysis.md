@@ -86,8 +86,7 @@ Yêu cầu chức năng được phân tách rõ ràng theo từng nhóm đối 
 - **FR_ADM_02 - Quản lý Danh mục (Master Data):**
   - Quản lý Học kỳ (Mở học kỳ mới, thiết lập ngày bắt đầu/kết thúc).
   - Quản lý Loại đồ án (`project_types`).
-  - Quản lý Bộ môn (`departments`): Thêm, sửa, xóa các **bộ môn trực thuộc khoa**. Toàn hệ thống phục vụ đúng một khoa (vai trò Admin là Giáo vụ Khoa), nên đây là bộ môn trong khoa chứ không phải các khoa trong trường.
-  - Quản lý Chuyên ngành (`majors`): Thêm, sửa, xóa các chuyên ngành, mỗi chuyên ngành thuộc một Bộ môn.
+  - Quản lý Chuyên ngành (`majors`): Thêm, sửa, xóa các chuyên ngành. Danh sách phẳng, **không phân cấp theo bộ môn** — toàn hệ thống phục vụ đúng một khoa (vai trò Admin là Giáo vụ Khoa) và không có quy tắc nghiệp vụ nào phụ thuộc vào bộ môn: sinh viên đăng ký được đề tài của bất kỳ giảng viên nào, giảng viên nào cũng nhận hướng dẫn được.
 - **FR_ADM_03 - Quản lý Quy trình & Đợt đăng ký:**
   - Thiết lập cửa sổ thời gian đăng ký đề tài theo học kỳ: `registration_start` và `registration_end` trong bảng `semesters`.
   - Hệ thống tự động khóa/mở chức năng đăng ký dựa trên mốc thời gian trên, không cần Admin can thiệp thủ công.
@@ -99,7 +98,7 @@ Yêu cầu chức năng được phân tách rõ ràng theo từng nhóm đối 
   - Chỉ định **GV Phản biện** (`reviewer_id`) cho từng đề tài trong hội đồng.
 - **FR_ADM_05 - Báo cáo & Thống kê:**
   - Xuất bảng điểm tổng kết (Excel/PDF).
-  - Xem biểu đồ thống kê: Tỷ lệ hoàn thành đồ án, Phân bổ số lượng SV theo từng bộ môn/giảng viên.
+  - Xem biểu đồ thống kê: Tỷ lệ hoàn thành đồ án, Phân bổ số lượng SV theo từng giảng viên hướng dẫn và theo chuyên ngành.
 
 ### 1.4. Yêu cầu Hệ thống (System Requirements)
 
