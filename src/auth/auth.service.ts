@@ -1,6 +1,5 @@
 import {
   BadRequestException,
-  ConflictException,
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -11,7 +10,6 @@ import { createHash, randomUUID } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import { LoginDto } from './dto/login.dto';
-import { RegisterDto } from './dto/register.dto';
 
 @Injectable()
 export class AuthService {
@@ -25,27 +23,6 @@ export class AuthService {
   ) {
     this.refreshSecret = config.getOrThrow<string>('JWT_REFRESH_SECRET');
     this.refreshExpiresIn = config.get('JWT_REFRESH_EXPIRES_IN', '30d');
-  }
-
-  async register(dto: RegisterDto) {
-    // Check duplicate email
-    const existing = await this.prisma.user.findUnique({
-      where: { email: dto.email },
-    });
-    if (existing) throw new ConflictException('Email already in use');
-
-    const hash = await bcrypt.hash(dto.password, 10);
-
-    const user = await this.prisma.user.create({
-      data: {
-        email: dto.email,
-        password: hash,
-        role: dto.role,
-      },
-      select: { id: true, email: true, role: true, createdAt: true },
-    });
-
-    return { message: 'Registered successfully', user };
   }
 
   async login(dto: LoginDto) {

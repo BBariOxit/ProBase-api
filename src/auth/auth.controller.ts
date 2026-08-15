@@ -14,7 +14,6 @@ import { Public } from './decorators/public.decorator';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import { LoginDto } from './dto/login.dto';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
-import { RegisterDto } from './dto/register.dto';
 
 /**
  * Five attempts a minute per IP on anything that takes a credential.
@@ -29,13 +28,6 @@ const CREDENTIAL_RATE_LIMIT = { default: { limit: 5, ttl: 60_000 } };
 @Controller('auth')
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
-
-  @Public()
-  @Throttle(CREDENTIAL_RATE_LIMIT)
-  @Post('register')
-  register(@Body() dto: RegisterDto) {
-    return this.authService.register(dto);
-  }
 
   @Public()
   @Throttle(CREDENTIAL_RATE_LIMIT)
