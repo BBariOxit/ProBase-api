@@ -19,32 +19,43 @@ import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 
 /**
- * Five attempts a minute per IP on anything that takes a credential.
+ * Five attempts a minute per IP, for endpoints where guessing is actually
+ * feasible — a password is short enough to be worth trying repeatedly.
  *
- * A password policy raises the cost of each guess; a rate limit caps how many
- * guesses are on offer. Without it, requiring eight characters just means an
- * attacker needs a slightly longer list. Genuine users do not sign in five
- * times a minute, so the ceiling is invisible to them.
+ * A password policy raises the cost of one guess; this caps how many guesses
+ * are on offer. Without it, requiring eight characters just means an attacker
+ * needs a slightly longer list.
+ *
+ * Deliberately NOT applied to reset-password: its token is 32 random bytes, so
+ * there is no guessing surface to defend and a tight limit would only punish
+ * someone finishing a legitimate reset. The looser app-wide ceiling still
+ * covers it.
  */
-const CREDENTIAL_RATE_LIMIT = { default: { limit: 5, ttl: 60_000 } };
+const GUESSABLE_SECRET_RATE_LIMIT = { default: { limit: 5, ttl: 60_000 } };
+
+/**
+ * Requesting a link is limited for a different reason: it sends mail. Left
+ * open it is a way to flood someone's inbox and burn the provider quota. The
+ * allowance is higher than for guessing because nothing is being guessed.
+ */
+const SEND_MAIL_RATE_LIMIT = { default: { limit: 10, ttl: 60_000 } };
 
 @Controller('auth')
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
   @Public()
-  @Throttle(CREDENTIAL_RATE_LIMIT)
+  @Throttle(GUESSABLE_SECRET_RATE_LIMIT)
   @Post('login')
   @HttpCode(HttpStatus.OK)
   login(@Body() dto: LoginDto) {
     return this.authService.login(dto);
   }
 
-  // Rotation means a stolen refresh token is worth one use; the limit stops it
-  // being fed to the endpoint in bulk. A real client refreshes about four
-  // times an hour.
+  // A refresh token is a signed 256-bit value that rotates on every use, so it
+  // is not guessable either — the app-wide ceiling is protection enough, and a
+  // tighter one would trip on a user with several tabs open.
   @Public()
-  @Throttle(CREDENTIAL_RATE_LIMIT)
   @Post('refresh')
   @HttpCode(HttpStatus.OK)
   refresh(@Body() dto: RefreshTokenDto) {
@@ -56,7 +67,7 @@ export class AuthController {
   // This one sends mail, so an unthrottled caller could flood a stranger's
   // inbox and burn the provider quota at the same time.
   @Public()
-  @Throttle(CREDENTIAL_RATE_LIMIT)
+  @Throttle(SEND_MAIL_RATE_LIMIT)
   @Post('forgot-password')
   @HttpCode(HttpStatus.OK)
   forgotPassword(@Body() dto: ForgotPasswordDto) {
@@ -72,7 +83,6 @@ export class AuthController {
   }
 
   @Public()
-  @Throttle(CREDENTIAL_RATE_LIMIT)
   @Post('reset-password')
   @HttpCode(HttpStatus.OK)
   resetPassword(@Body() dto: ResetPasswordDto) {
@@ -94,7 +104,7 @@ export class AuthController {
 
   // Guessing `currentPassword` is a credential attack like any other, even
   // though the caller already holds a valid access token.
-  @Throttle(CREDENTIAL_RATE_LIMIT)
+  @Throttle(GUESSABLE_SECRET_RATE_LIMIT)
   @Patch('change-password')
   changePassword(
     @GetUser('id') userId: number,
