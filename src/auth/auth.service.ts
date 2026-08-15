@@ -7,7 +7,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
-import { createHash } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import { LoginDto } from './dto/login.dto';
@@ -191,10 +191,19 @@ export class AuthService {
 
     const [accessToken, refreshToken] = await Promise.all([
       this.jwt.signAsync(jwtPayload),
-      this.jwt.signAsync(jwtPayload, {
-        secret: this.refreshSecret,
-        expiresIn: this.refreshExpiresIn as `${number}d`,
-      }),
+      // `jti` is what keeps two refresh tokens for the same user distinct.
+      // Everything else in the payload is fixed, and `iat` only has one-second
+      // resolution, so two issues inside the same second produced a
+      // byte-identical JWT — and therefore an identical tokenHash, which the
+      // unique index rejected with a 500. Changing a password issues a pair
+      // and the client immediately uses it, so that second is easy to hit.
+      this.jwt.signAsync(
+        { ...jwtPayload, jti: randomUUID() },
+        {
+          secret: this.refreshSecret,
+          expiresIn: this.refreshExpiresIn as `${number}d`,
+        },
+      ),
     ]);
 
     // Store refresh token hash in DB
