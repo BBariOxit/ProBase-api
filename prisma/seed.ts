@@ -28,6 +28,29 @@ const DEMO_STUDENT_EMAIL = (
 const DEMO_STUDENT_PASSWORD =
   process.env.SEED_STUDENT_PASSWORD ?? 'Student@123';
 
+// Two lecturers, not one. A single lecturer cannot exercise the rule that
+// matters most on topics — that owning a topic, rather than merely holding the
+// LECTURER role, is what permits editing it — and the council and reviewer
+// features later need more than one lecturer to assign anyway.
+const DEMO_LECTURER_PASSWORD =
+  process.env.SEED_LECTURER_PASSWORD ?? 'Lecturer@123';
+const DEMO_LECTURERS = [
+  {
+    email: 'gv001@probase.dev',
+    lecturerCode: 'GV001',
+    fullName: 'Trần Thị B',
+    academicTitle: 'TS',
+    researchInterests: 'Kỹ thuật phần mềm, kiểm thử tự động',
+  },
+  {
+    email: 'gv002@probase.dev',
+    lecturerCode: 'GV002',
+    fullName: 'Lê Văn C',
+    academicTitle: 'ThS',
+    researchInterests: 'Hệ thống thông tin, cơ sở dữ liệu',
+  },
+];
+
 // Chuyên ngành — a flat list. Swap these for your faculty's real ones.
 const MAJORS = [
   { code: 'KTPM', name: 'Kỹ thuật Phần mềm' },
@@ -131,9 +154,32 @@ async function main() {
   });
   console.log(`  demo student: ${demoStudent.email} (mustChangePassword)`);
 
+  // Ready to use rather than mustChangePassword: these exist to drive the
+  // topic screens, and a forced password change on every reseed only gets in
+  // the way of that.
+  const lecturerPassword = await bcrypt.hash(DEMO_LECTURER_PASSWORD, 10);
+  for (const lecturer of DEMO_LECTURERS) {
+    const { email, ...profile } = lecturer;
+    await prisma.user.upsert({
+      where: { email },
+      create: {
+        email,
+        password: lecturerPassword,
+        role: 'LECTURER',
+        mustChangePassword: false,
+        lecturerProfile: { create: profile },
+      },
+      update: {},
+    });
+  }
+  console.log(`  demo lecturers: ${DEMO_LECTURERS.length}`);
+
   console.log('\nLogin with:');
-  console.log(`  ADMIN    ${ADMIN_EMAIL} / ${ADMIN_PASSWORD}`);
-  console.log(`  STUDENT  ${DEMO_STUDENT_EMAIL} / ${DEMO_STUDENT_PASSWORD}`);
+  console.log(`  ADMIN     ${ADMIN_EMAIL} / ${ADMIN_PASSWORD}`);
+  console.log(`  STUDENT   ${DEMO_STUDENT_EMAIL} / ${DEMO_STUDENT_PASSWORD}`);
+  for (const { email } of DEMO_LECTURERS) {
+    console.log(`  LECTURER  ${email} / ${DEMO_LECTURER_PASSWORD}`);
+  }
 }
 
 main()

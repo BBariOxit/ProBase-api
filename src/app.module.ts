@@ -10,6 +10,7 @@ import { MajorsModule } from './majors/majors.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { ProjectTypesModule } from './project-types/project-types.module';
 import { SemestersModule } from './semesters/semesters.module';
+import { TopicsModule } from './topics/topics.module';
 import { UsersModule } from './users/users.module';
 
 @Module({
@@ -29,6 +30,7 @@ import { UsersModule } from './users/users.module';
     MajorsModule,
     SemestersModule,
     ProjectTypesModule,
+    TopicsModule,
     UsersModule,
     MailModule,
   ],
