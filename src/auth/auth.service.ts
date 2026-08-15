@@ -133,6 +133,10 @@ export class AuthService {
         email: true,
         role: true,
         isActive: true,
+        // Login returns this too, but a client that reloads has only /auth/me
+        // to rebuild its session from — without it here, refreshing the page
+        // silently escapes the forced password-change screen.
+        mustChangePassword: true,
         createdAt: true,
         updatedAt: true,
         studentProfile: true,
