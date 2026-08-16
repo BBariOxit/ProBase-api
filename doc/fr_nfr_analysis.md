@@ -14,15 +14,35 @@ Yêu cầu chức năng được phân tách rõ ràng theo từng nhóm đối 
   - Đăng nhập, đăng xuất hệ thống.
   - Xem và cập nhật hồ sơ cá nhân: Số điện thoại (`phone`), Giới thiệu bản thân (`bio`).
   - **Quên mật khẩu**: Gửi yêu cầu đặt lại mật khẩu qua email (link reset có thời hạn 15 phút, dùng một lần).
+  - **Mã số sinh viên và email là cùng một chuỗi.** Mã gồm **2 chữ số năm nhập học + 5 chữ số thứ tự** (ví dụ `2212345`), và email trường là mã đó cộng tên miền (`2212345@dlu.edu.vn`). Vì vậy khóa của sinh viên **được suy ra từ mã**, không lấy từ ô nhập tay: `khóa = năm nhập học − 1976` (2022 → K46). Lúc import, phần trước `@` của email phải trùng `studentCode`; lệch nhau thì dòng đó bị từ chối chứ không âm thầm chọn một bên. Trường `cohort` lưu **năm nhập học** dạng `"2022"`; số khóa chỉ là cách hiển thị.
 - **FR_STU_02 - Xem danh sách đề tài:**
-  - Tra cứu, lọc, tìm kiếm các đề tài đang được mở theo học kỳ và loại đồ án (Cơ sở, Chuyên ngành, Tốt nghiệp).
-  - Xem chi tiết đề tài (Mô tả, yêu cầu, GV hướng dẫn, số lượng slot).
+  - Tra cứu, lọc, tìm kiếm các đề tài đang được mở theo học kỳ, loại đồ án (Cơ sở, Chuyên ngành, Tốt nghiệp) và **giảng viên hướng dẫn**.
+  - Danh sách **mặc định lọc theo loại đồ án dành cho khóa của sinh viên** trong học kỳ đó (xem FR_ADM_03). Bộ lọc mặc định được hiển thị rõ và gỡ được — lọc ngầm mà không nói khiến người dùng tưởng hệ thống thiếu dữ liệu.
+  - Xem chi tiết đề tài (Mô tả, yêu cầu, GV hướng dẫn, số chỗ còn trống).
 - **FR_STU_03 - Đăng ký đề tài:**
-  - Chọn đề tài và đăng ký tham gia cá nhân (tự động tạo nhóm 1 người).
-  - Tạo nhóm, mời thêm thành viên, đợi đồng ý rồi trưởng nhóm nộp đăng ký để GV duyệt.
+  - Chọn đề tài và bấm **Đăng ký**. Hệ thống tự tạo nhóm trên chính đề tài đó và đặt người đăng ký làm trưởng nhóm — **đăng ký và tạo nhóm là một hành động**, giao diện không tách thành hai bước. Đăng ký một mình cũng là một nhóm (một người).
+  - Mời thêm thành viên theo mã SV hoặc email, tối đa `max_students` của đề tài.
   - Hủy đăng ký (chỉ được phép khi nhóm chưa ở trạng thái APPROVED và còn trong thời hạn đăng ký).
   - **Mỗi học kỳ một sinh viên chỉ tham gia được một nhóm.** Được mời vào nhiều nhóm là bình thường, nhưng chấp nhận (ACCEPTED) lời mời thứ hai trong cùng học kỳ sẽ bị từ chối ở tầng database (partial unique index), không phụ thuộc vào kiểm tra ở tầng ứng dụng.
-  - **Mỗi đề tài chỉ có một nhóm được duyệt.** Nhiều nhóm được phép SUBMIT vào cùng một đề tài để GV lựa chọn, nhưng chỉ một nhóm đạt trạng thái APPROVED — cũng do database bảo đảm.
+  - **Chỉ sinh viên thuộc khóa được mở loại đồ án đó mới đăng ký được** (xem FR_ADM_03). Kiểm ở API, không chỉ ở giao diện.
+
+##### FR_STU_03a - Cơ chế phân bổ: ai nhanh hơn người đó được
+
+Mô hình trước đây cho **nhiều nhóm cùng SUBMIT vào một đề tài rồi giảng viên chọn một**. Mô hình đó bị **loại bỏ**, vì cộng với quy tắc mỗi sinh viên chỉ một nhóm mỗi học kỳ, nó đẩy người bị loại vào thế kẹt: họ chỉ có đúng một lượt tại một thời điểm, và khi biết mình trượt thì những đề tài còn lại đã bị nhận hết. Rớt càng muộn càng thiệt, và khoa không nhìn thấy tình hình phân bổ cho tới khi mọi giảng viên đã chọn xong.
+
+Thay bằng cơ chế **giành chỗ theo thứ tự đến**:
+
+- **Nhóm đầu tiên chạm vào đề tài là chủ đề tài đó.** Nhóm thứ hai bị từ chối ngay ở tầng database bằng partial unique index trên `registration_groups(topic_id) WHERE status <> 'REJECTED'` — không cần đếm, không cần khoá, và đúng kể cả khi hàng nghìn sinh viên bấm cùng một giây lúc mở cổng.
+- `max_students` là **sức chứa của nhóm**, không phải số nhóm. Đề tài hiển thị dạng `2/3`.
+- **Số ghế đã chiếm = thành viên `ACCEPTED` + lời mời `INVITED` đang treo.** Lời mời chính là cơ chế giữ chỗ: nhóm 2 người mời bạn thứ ba thì đề tài thành `3/3` ngay, không có khe hở cho người lạ chen vào trong lúc chờ. Bạn đó từ chối hoặc lời mời hết hạn thì ghế nhả ra.
+- Để giữ chỗ không biến thành công cụ khoá đề tài miễn phí: **lời mời hết hạn sau 48 giờ** (tự chuyển `DECLINED`), và mỗi sinh viên chỉ được có tối đa **3 lời mời đang treo**.
+- **Nhóm tự khai còn nhận người hay không** (`open_for_join`, mặc định **không**). Nhóm chưa đầy nhưng đóng thì hiển thị "Đã có nhóm nhận" chứ không phải "còn 1 chỗ" — hiện còn chỗ trong khi ghế đã có chủ là nói dối người xem. Nhóm muốn tìm thêm thành viên thì tự bật.
+- **Nhận ghế phải là thao tác nguyên khối.** Nhóm 2 người xin vào đề tài chỉ còn 1 ghế thì **trượt toàn bộ**, không nhận một người rồi bỏ người kia lơ lửng.
+- **Trạng thái "đã đầy" được tính lúc đọc, tuyệt đối không lưu thành cột.** Nếu lưu, mọi đường huỷ — thành viên rời nhóm, lời mời hết hạn, lời mời bị từ chối, nhóm giải tán, GV từ chối, admin khoá tài khoản — đều phải nhớ lật ngược lại; quên một đường là đề tài kẹt vĩnh viễn ở trạng thái đầy. Tính `is_full = số_ghế_đã_chiếm >= max_students` khi đọc thì mọi kiểu huỷ đều tự mở lại đề tài mà không cần dòng code nào nhớ làm việc đó.
+- Nhóm bị huỷ hoặc bị từ chối **không xoá cứng** — chuyển `REJECTED`. Trạng thái này nằm ngoài partial unique index nên đề tài tự động trở lại thị trường, đồng thời vẫn giữ được dấu vết ai từng rút và bị từ chối vì lý do gì.
+
+_(Các cơ chế phân bổ cạnh tranh — đăng ký nguyện vọng có thứ tự, đấu giá — là **tính năng riêng**, xem FR_ADM_03.)_
+
 - **FR_STU_04 - Tự đề xuất đề tài:**
   - Nhập thông tin đề xuất đề tài mới (Tên, Mô tả, Mục tiêu).
   - Chỉ định một Giảng viên mong muốn hướng dẫn hoặc gửi công khai (không chỉ định).
@@ -40,12 +60,24 @@ Yêu cầu chức năng được phân tách rõ ràng theo từng nhóm đối 
 
 #### 1.1.1. Nhóm đăng ký (Group Registration)
 
-- **FR_STU_GRP_01:** Tạo nhóm đăng ký cho một đề tài (tự động trở thành trưởng nhóm).
-- **FR_STU_GRP_02:** Mời sinh viên khác vào nhóm theo mã SV hoặc email.
-- **FR_STU_GRP_03:** Nhận thông báo khi được mời, chấp nhận (`ACCEPTED`) hoặc từ chối (`DECLINED`) lời mời.
-- **FR_STU_GRP_04:** Trưởng nhóm có thể xóa thành viên đã ACCEPTED trước khi Submit.
+Nhóm **luôn gắn với một đề tài kể từ lúc sinh ra** — `registration_groups.topic_id` là NOT NULL, nên không tồn tại trạng thái "nhóm đã lập, đang đi tìm đề tài". Thứ tự luôn là chọn đề tài trước, nhóm hình thành tại đó. Đây cũng là lý do giao diện không được bày ra bước "tạo nhóm" riêng: sinh viên chỉ thấy **Đăng ký đề tài**, còn từ "nhóm" xuất hiện sau đó như một hệ quả.
+
+Nhóm là đơn vị mà toàn bộ phần sau của hệ thống bám vào: bài nộp (`submissions.group_id`), điểm hướng dẫn và nhận xét từng sinh viên (`registration_group_members`), lịch bảo vệ (`council_topics.group_id`), điểm phản biện và hội đồng (`council_topic_grades`).
+
+- **FR_STU_GRP_01:** Đăng ký một đề tài, hệ thống tạo nhóm trên đề tài đó và đặt người đăng ký làm trưởng nhóm.
+- **FR_STU_GRP_02:** Mời sinh viên khác vào nhóm theo mã SV hoặc email. Lời mời **chiếm ghế ngay** và hết hạn sau 48 giờ.
+- **FR_STU_GRP_03:** Nhận thông báo khi được mời, chấp nhận (`ACCEPTED`) hoặc từ chối (`DECLINED`) lời mời. Tối đa 3 lời mời đang treo cùng lúc.
+- **FR_STU_GRP_04:** Trưởng nhóm có thể xóa thành viên đã ACCEPTED trước khi Submit; ghế được nhả ra ngay.
 - **FR_STU_GRP_05:** Trưởng nhóm Submit đăng ký khi tất cả thành viên đã accept (không còn ai đang `INVITED`).
 - **FR_STU_GRP_06:** Xem trạng thái nhóm của bản thân (FORMING / SUBMITTED / APPROVED / REJECTED) và danh sách thành viên cùng nhóm.
+- **FR_STU_GRP_07:** Trưởng nhóm bật/tắt `open_for_join` để tuyên bố nhóm còn nhận thêm người hay đã đủ.
+- **FR_STU_GRP_08:** Trưởng nhóm giải tán nhóm khi chưa được duyệt; nhóm chuyển `REJECTED` và đề tài trở lại thị trường.
+
+**Màn hình của sinh viên có ba trạng thái, không phải một.** Một sinh viên trong một học kỳ đi qua đúng ba trạng thái này và dừng lại ở trạng thái cuối:
+
+1. **Chưa đăng ký, cổng đang mở** — danh sách đề tài là nội dung chính.
+2. **Đã nộp, chờ giảng viên xác nhận** — đề tài và nhóm của mình lên đầu; danh sách đề tài lùi xuống hoặc ẩn đi.
+3. **Đã được duyệt** — không còn danh sách đề tài; chỉ còn đề tài của mình, nhóm, và các deadline sắp tới.
 
 ### 1.2. Đối với Giảng viên (Lecturer)
 
@@ -53,11 +85,12 @@ Yêu cầu chức năng được phân tách rõ ràng theo từng nhóm đối 
   - Đăng nhập, đăng xuất hệ thống.
   - Cập nhật hồ sơ cá nhân: Chức danh, Số điện thoại (`phone`), Giới thiệu bản thân (`bio`), Hướng nghiên cứu (`research_interests`).
 - **FR_LEC_02 - Quản lý Đề tài do GV ra đề:**
-  - Tạo đề tài mới, thiết lập số lượng sinh viên tối đa, yêu cầu đầu ra.
+  - Tạo đề tài mới, thiết lập số lượng sinh viên tối đa (`max_students` — sức chứa của nhóm sẽ làm đề tài), yêu cầu đầu ra.
   - Chỉnh sửa hoặc xóa đề tài (chỉ xóa được khi chưa có SV nào đăng ký).
-  - Đóng/Mở trạng thái nhận thêm sinh viên của đề tài.
-- **FR_LEC_03 - Duyệt đăng ký & Đề xuất:**
-  - **Duyệt nhóm đăng ký:** Xem danh sách các nhóm đã Submit vào đề tài của mình, xem hồ sơ từng thành viên, chấp nhận (APPROVE) hoặc từ chối (REJECT) cả nhóm kèm lý do.
+  - Đóng/Mở cổng đăng ký của đề tài. Lưu ý phân biệt hai khái niệm: `TopicStatus.OPEN` nói về **cổng do giảng viên mở**, còn `is_full` nói về **ghế đã đủ người** — đề tài đang OPEN vẫn có thể đã đầy, và ngược lại.
+- **FR_LEC_03 - Xác nhận đăng ký & Duyệt đề xuất:**
+  - **Xác nhận nhóm đăng ký:** Vì đề tài đã thuộc về nhóm nhận đầu tiên (FR_STU_03a), thao tác của giảng viên là **xác nhận**, không còn là lựa chọn giữa nhiều nhóm. Xem hồ sơ từng thành viên rồi chấp nhận (APPROVE) hoặc từ chối (REJECT) kèm lý do.
+  - **Từ chối là hành động nặng:** nó nhả đề tài ra và đẩy nhóm về vạch xuất phát trong khi thời gian đăng ký đang trôi. Vì vậy bắt buộc kèm lý do (`lecturer_feedback`), và **quá hạn xác nhận thì hệ thống tự coi như đồng ý** — không để nhóm bị treo vô thời hạn vì một lỗi không thuộc về họ.
   - **Duyệt SV đề xuất:** Xem danh sách ý tưởng SV gửi lên, Chấp nhận hướng dẫn (tự động tạo thành đề tài chính thức) hoặc Từ chối kèm lý do phản hồi.
 - **FR_LEC_04 - Theo dõi tiến độ & Báo cáo:**
   - Xem danh sách **tất cả các phiên bản nộp** (theo trường `version`) của từng nhóm, tải về hoặc xem từng phiên bản riêng lẻ.
@@ -72,9 +105,9 @@ Yêu cầu chức năng được phân tách rõ ràng theo từng nhóm đối 
 
 #### 1.2.1. Nhóm đăng ký (Group Registration)
 
-- **FR_LEC_GRP_01:** Xem danh sách các nhóm đã Submit đăng ký vào đề tài của mình.
-- **FR_LEC_GRP_02:** Xem hồ sơ (tên, mã SV, lớp, chuyên ngành) của từng thành viên trong nhóm trước khi duyệt.
-- **FR_LEC_GRP_03:** Duyệt (APPROVE) hoặc từ chối (REJECT) cả nhóm với lý do.
+- **FR_LEC_GRP_01:** Xem nhóm đã nhận từng đề tài của mình (mỗi đề tài nhiều nhất một nhóm đang sống).
+- **FR_LEC_GRP_02:** Xem hồ sơ (tên, mã SV, lớp, chuyên ngành) của từng thành viên trong nhóm trước khi xác nhận.
+- **FR_LEC_GRP_03:** Xác nhận (APPROVE) hoặc từ chối (REJECT) cả nhóm với lý do bắt buộc. Từ chối sẽ nhả đề tài cho sinh viên khác đăng ký.
 - **FR_LEC_GRP_04:** Chấm điểm hướng dẫn riêng cho từng thành viên trong nhóm (`mentor_grade` trong `registration_group_members`).
 
 ### 1.3. Đối với Quản trị viên (Admin / Giáo vụ Khoa)
@@ -91,6 +124,18 @@ Yêu cầu chức năng được phân tách rõ ràng theo từng nhóm đối 
   - Thiết lập cửa sổ thời gian đăng ký đề tài theo học kỳ: `registration_start` và `registration_end` trong bảng `semesters`.
   - Hệ thống tự động khóa/mở chức năng đăng ký dựa trên mốc thời gian trên, không cần Admin can thiệp thủ công.
   - (Tùy chọn) Xét duyệt lần cuối các đề tài của giảng viên trước khi public cho SV.
+  - **Khai báo khóa nào làm loại đồ án nào trong học kỳ.** Cùng một kỳ, khoa thường mở Đồ án Cơ sở cho K47, Chuyên ngành cho K46, Tốt nghiệp cho K45. Quy tắc này là **dữ liệu do giáo vụ khai**, không suy ra từ năm học của sinh viên — suy ra sẽ sai ngay với sinh viên học chậm, học vượt, bảo lưu hoặc học lại, mà nhóm đó không hề hiếm. Mô hình hoá đúng như thông báo khoa vẫn ra:
+
+    ```
+    SemesterEligibility(semester_id, project_type_id, cohort)
+      UNIQUE(semester_id, project_type_id, cohort)
+    ```
+
+    Bảng này chịu được cả trường hợp một khóa được mở hai loại đồ án trong cùng kỳ — chỉ là hai dòng. Nó phục vụ hai chiều: lọc mặc định danh sách đề tài cho sinh viên (FR_STU_02), và **chặn ở API** khi sinh viên nhận đề tài không thuộc diện của khóa mình (FR_STU_03).
+
+  - **Cơ chế phân bổ của học kỳ** — `semesters.allocation_mode`:
+    - `FIRST_COME` _(mặc định, phạm vi hiện tại)_: ai nhận trước người đó được, theo FR_STU_03a.
+    - `PREFERENCE_ROUND` _(v2, chưa triển khai)_: sinh viên nộp tối đa 3 nguyện vọng có thứ tự trong một cửa sổ; hết cửa sổ chạy một lượt phân bổ tập trung (thuật toán chấp nhận trì hoãn, ưu tiên theo điểm tích luỹ hoặc thời điểm nộp). Enum được đặt sẵn ngay từ đầu để sau này thêm chế độ là **mở rộng chứ không phải viết lại** phần đăng ký.
 - **FR_ADM_04 - Quản lý Hội đồng bảo vệ (Councils):**
   - Tạo Hội đồng bảo vệ (Tên, ngày giờ, địa điểm).
   - Phân công Giảng viên vào hội đồng (Chủ tịch, Thư ký, Ủy viên...).
