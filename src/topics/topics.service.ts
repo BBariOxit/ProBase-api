@@ -4,7 +4,13 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Prisma, Role, TopicStatus } from '../../generated/prisma/client';
+import {
+  GroupMemberStatus,
+  Prisma,
+  RegistrationGroupStatus,
+  Role,
+  TopicStatus,
+} from '../../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateTopicDto } from './dto/create-topic.dto';
 import { QueryTopicsDto } from './dto/query-topics.dto';
@@ -22,6 +28,38 @@ const PUBLISHED_STATUSES = [
   TopicStatus.COMPLETED,
 ] as const;
 
+/**
+ * The one group that currently holds a topic, if any.
+ *
+ * A plain count of registration_groups is the wrong question now. Since the
+ * allocation model changed, at most one group can be live on a topic — so a
+ * count can only ever be nought or one — and REJECTED rows are kept on purpose
+ * for the record, which means the count reports groups that walked away as
+ * though they were still there.
+ *
+ * Seats are ACCEPTED members plus outstanding INVITED ones, because an
+ * invitation holds its seat until it is answered or expires.
+ */
+const ACTIVE_GROUP_SELECT = {
+  where: { status: { not: RegistrationGroupStatus.REJECTED } },
+  select: {
+    id: true,
+    status: true,
+    _count: {
+      select: {
+        members: {
+          where: {
+            status: {
+              in: [GroupMemberStatus.INVITED, GroupMemberStatus.ACCEPTED],
+            },
+          },
+        },
+      },
+    },
+  },
+  take: 1,
+} satisfies Prisma.Topic$registrationGroupsArgs;
+
 /** List rows carry no long-text bodies — those belong to the detail view. */
 const LIST_SELECT = {
   id: true,
@@ -32,8 +70,37 @@ const LIST_SELECT = {
   semester: { select: { id: true, name: true, code: true } },
   projectType: { select: { id: true, name: true, code: true } },
   lecturer: { select: { id: true, fullName: true, academicTitle: true } },
-  _count: { select: { registrationGroups: true } },
+  registrationGroups: ACTIVE_GROUP_SELECT,
 } satisfies Prisma.TopicSelect;
+
+type TopicWithGroups = {
+  registrationGroups: {
+    id: number;
+    status: RegistrationGroupStatus;
+    _count: { members: number };
+  }[];
+};
+
+/**
+ * Flattens the at-most-one live group into a field the client can read
+ * directly. An array of one is an implementation detail of how the constraint
+ * is expressed, not something every caller should have to unwrap.
+ */
+function withActiveGroup<T extends TopicWithGroups>(topic: T) {
+  const { registrationGroups, ...rest } = topic;
+  const group = registrationGroups[0];
+
+  return {
+    ...rest,
+    activeGroup: group
+      ? {
+          id: group.id,
+          status: group.status,
+          occupiedSeats: group._count.members,
+        }
+      : null,
+  };
+}
 
 /**
  * The detail view deliberately exposes no contact details for the lecturer.
@@ -59,7 +126,7 @@ const DETAIL_INCLUDE = {
       academicTitle: true,
     },
   },
-  _count: { select: { registrationGroups: true } },
+  registrationGroups: ACTIVE_GROUP_SELECT,
 } satisfies Prisma.TopicInclude;
 
 @Injectable()
@@ -102,7 +169,7 @@ export class TopicsService {
     ]);
 
     return {
-      items,
+      items: items.map(withActiveGroup),
       total,
       page: query.page,
       limit: query.limit,
@@ -150,7 +217,7 @@ export class TopicsService {
     }
 
     return {
-      ...topic,
+      ...withActiveGroup(topic),
       // The registration window lives on the semester, so the client would
       // otherwise have to fetch it separately just to know whether to enable
       // the register button.
@@ -171,10 +238,12 @@ export class TopicsService {
     await this.requireSemester(dto.semesterId);
     await this.requireProjectType(dto.projectTypeId);
 
-    return this.prisma.topic.create({
+    const topic = await this.prisma.topic.create({
       data: { ...dto, lecturerId },
       include: DETAIL_INCLUDE,
     });
+
+    return withActiveGroup(topic);
   }
 
   async update(id: number, dto: UpdateTopicDto, userId: number, role: Role) {
@@ -191,17 +260,23 @@ export class TopicsService {
 
     if (dto.projectTypeId) await this.requireProjectType(dto.projectTypeId);
 
-    return this.prisma.topic.update({
+    const updated = await this.prisma.topic.update({
       where: { id },
       data: dto,
       include: DETAIL_INCLUDE,
     });
+
+    return withActiveGroup(updated);
   }
 
   async remove(id: number, userId: number, role: Role) {
     const topic = await this.requireOwnTopic(id, userId, role);
 
-    if (topic._count.registrationGroups > 0) {
+    // Only a group that is still standing blocks deletion. REJECTED rows are
+    // kept for the record, and counting them would leave a topic that everyone
+    // walked away from permanently undeletable — while the unique index says
+    // it is free for the next student to take.
+    if (topic.activeGroupCount > 0) {
       throw new ConflictException(
         'Cannot delete a topic that students have already registered for',
       );
@@ -247,12 +322,14 @@ export class TopicsService {
     return this.setStatus(id, TopicStatus.APPROVED);
   }
 
-  private setStatus(id: number, status: TopicStatus) {
-    return this.prisma.topic.update({
+  private async setStatus(id: number, status: TopicStatus) {
+    const topic = await this.prisma.topic.update({
       where: { id },
       data: { status },
       include: DETAIL_INCLUDE,
     });
+
+    return withActiveGroup(topic);
   }
 
   private async requireTopic(id: number) {
@@ -262,13 +339,19 @@ export class TopicsService {
         id: true,
         status: true,
         lecturerId: true,
-        _count: { select: { registrationGroups: true } },
+        _count: {
+          select: {
+            registrationGroups: {
+              where: { status: { not: RegistrationGroupStatus.REJECTED } },
+            },
+          },
+        },
       },
     });
 
     if (!topic) throw new NotFoundException('Topic not found');
 
-    return topic;
+    return { ...topic, activeGroupCount: topic._count.registrationGroups };
   }
 
   /**

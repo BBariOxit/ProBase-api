@@ -2,6 +2,7 @@ import 'dotenv/config';
 import * as bcrypt from 'bcrypt';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient } from '../generated/prisma/client';
+import { cohortFromStudentCode } from '../src/users/student-code.util';
 
 const connectionString = process.env.DATABASE_URL;
 if (!connectionString) throw new Error('DATABASE_URL is not set');
@@ -22,8 +23,12 @@ const ADMIN_PASSWORD = process.env.SEED_ADMIN_PASSWORD ?? 'Admin@12345';
 // A fixture for building the forced-password-change screen. Bulk import mails
 // a random temp password, which is useless while developing a UI — this account
 // carries mustChangePassword with a password you already know.
+// The address is the student code plus the domain, as it is at the university:
+// cohort is derived from those first two digits, so a fixture like sv001@ would
+// not survive its own validation rules.
+const DEMO_STUDENT_CODE = process.env.SEED_STUDENT_CODE ?? '2212345';
 const DEMO_STUDENT_EMAIL = (
-  process.env.SEED_STUDENT_EMAIL ?? 'sv001@probase.dev'
+  process.env.SEED_STUDENT_EMAIL ?? `${DEMO_STUDENT_CODE}@dlu.edu.vn`
 ).toLowerCase();
 const DEMO_STUDENT_PASSWORD =
   process.env.SEED_STUDENT_PASSWORD ?? 'Student@123';
@@ -101,7 +106,7 @@ async function main() {
     month >= 7 ? new Date().getFullYear() : new Date().getFullYear() - 1;
   const semesterCode = `HK1-${academicYear}-${academicYear + 1}`;
 
-  await prisma.semester.upsert({
+  const semester = await prisma.semester.upsert({
     where: { code: semesterCode },
     create: {
       code: semesterCode,
@@ -116,6 +121,34 @@ async function main() {
     update: { isActive: true },
   });
   console.log(`  semester: ${semesterCode} (registration open)`);
+
+  // Which cohort does which kind of project this semester — the mapping the
+  // faculty announces. Cơ sở goes to the third-years, Chuyên ngành to the
+  // fourth, Tốt nghiệp to the fifth, counted back from the academic year so
+  // the fixture stays right whenever it is run. The demo student's code puts
+  // them in the Chuyên ngành cohort.
+  const ELIGIBILITY: { code: string; yearsBack: number }[] = [
+    { code: 'DACS', yearsBack: 3 },
+    { code: 'DACN', yearsBack: 4 },
+    { code: 'DATN', yearsBack: 5 },
+  ];
+
+  await prisma.semesterEligibility.deleteMany({
+    where: { semesterId: semester.id },
+  });
+  for (const { code, yearsBack } of ELIGIBILITY) {
+    const projectType = await prisma.projectType.findUniqueOrThrow({
+      where: { code },
+    });
+    await prisma.semesterEligibility.create({
+      data: {
+        semesterId: semester.id,
+        projectTypeId: projectType.id,
+        cohort: String(academicYear - yearsBack + 1),
+      },
+    });
+  }
+  console.log(`  eligibility: ${ELIGIBILITY.length} cohort/type rules`);
 
   const admin = await prisma.user.upsert({
     where: { email: ADMIN_EMAIL },
@@ -142,10 +175,12 @@ async function main() {
       mustChangePassword: true,
       studentProfile: {
         create: {
-          studentCode: 'SV001',
+          studentCode: DEMO_STUDENT_CODE,
           fullName: 'Nguyễn Văn A',
-          class: 'D21CQCN01',
-          cohort: '2021',
+          class: 'CTK46',
+          // Derived from the code, exactly as the import and create paths do
+          // it — the seed must not be the one place that sets it by hand.
+          cohort: cohortFromStudentCode(DEMO_STUDENT_CODE)!,
           majorId: majorIdByCode.get('KTPM'),
         },
       },

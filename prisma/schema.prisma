@@ -21,6 +21,15 @@ enum Role {
   STUDENT
 }
 
+// How a semester hands topics out. FIRST_COME is the whole of v1: the first
+// group to take a topic owns it. PREFERENCE_ROUND is declared now and not yet
+// implemented, so that adding it later is an extension of registration rather
+// than a rewrite of it.
+enum AllocationMode {
+  FIRST_COME
+  PREFERENCE_ROUND
+}
+
 enum TopicProposalStatus {
   PENDING
   ACCEPTED
@@ -184,13 +193,43 @@ model Semester {
   reviewerWeight          Float     @default(0.3)
   councilWeight           Float     @default(0.3)
 
+  allocationMode AllocationMode @default(FIRST_COME)
+
   // Relations
   topics             Topic[]
   topicProposals     TopicProposal[]
   registrationGroups RegistrationGroup[]
   councils           Council[]
+  eligibilities      SemesterEligibility[]
 
   @@map("semesters")
+}
+
+/// Which cohort may take which kind of project this semester.
+///
+/// The faculty opens Đồ án Cơ sở to K47, Chuyên ngành to K46 and Tốt nghiệp to
+/// K45 in the same semester, and that mapping is an announcement the office
+/// makes — not something derivable from a student's year of study. Deriving it
+/// breaks on exactly the students it matters most for: those repeating,
+/// deferring, or running ahead.
+///
+/// `cohort` is the year of admission as four digits ("2022"), the same form
+/// StudentProfile.cohort takes, because that is what the student code encodes.
+/// A cohort doing two kinds of project in one semester is simply two rows.
+model SemesterEligibility {
+  id            Int    @id @default(autoincrement())
+  semesterId    Int
+  projectTypeId Int
+  cohort        String
+
+  semester    Semester    @relation(fields: [semesterId], references: [id], onDelete: Cascade)
+  projectType ProjectType @relation(fields: [projectTypeId], references: [id], onDelete: Restrict)
+
+  @@unique([semesterId, projectTypeId, cohort])
+  // Answering "what may this student take" is the hot path: one cohort, one
+  // semester, every eligible type.
+  @@index([semesterId, cohort])
+  @@map("semester_eligibilities")
 }
 
 model ProjectType {
@@ -201,6 +240,7 @@ model ProjectType {
   // Relations
   topics         Topic[]
   topicProposals TopicProposal[]
+  eligibilities  SemesterEligibility[]
 
   @@map("project_types")
 }
@@ -279,6 +319,15 @@ model RegistrationGroup {
   name            String?
   status          RegistrationGroupStatus @default(FORMING)
   lecturerFeedback String?                @db.Text
+
+  /// Whether strangers may take the group's remaining seats.
+  ///
+  /// Defaults to closed, because students agree on a team before they register
+  /// and a seat already promised to a friend is not really free. Showing
+  /// "2/3 · còn chỗ" for such a group would be the interface telling a lie, so
+  /// a closed group reads as taken however many seats sit unused.
+  openForJoin     Boolean                 @default(false)
+
   createdAt       DateTime                @default(now())
   updatedAt       DateTime                @updatedAt
 
