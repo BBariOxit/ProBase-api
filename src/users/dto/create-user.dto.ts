@@ -1,6 +1,10 @@
 import { z } from 'zod';
 import { Role } from '../../../generated/prisma/client';
 import { emailSchema } from '../../common/email.schema';
+import {
+  cohortFromStudentCode,
+  studentCodeMatchesEmail,
+} from '../student-code.util';
 
 // A STUDENT/LECTURER account is meaningless without its profile — every
 // downstream relation (groups, grades, topics) points at the profile, not the
@@ -16,17 +20,37 @@ const trimmed = (max: number) =>
 const requiredTrimmed = (max: number, message: string) =>
   trimmed(max).pipe(z.string().min(1, message));
 
-const StudentCreateSchema = z.object({
-  role: z.literal(Role.STUDENT),
-  email: emailSchema,
-  studentCode: requiredTrimmed(50, 'Student code is required'),
-  fullName: requiredTrimmed(255, 'Full name is required'),
-  majorId: z.number().int().positive().optional(),
-  class: trimmed(100).optional(),
-  cohort: trimmed(10).optional(),
-  phone: trimmed(20).optional(),
-  bio: trimmed(2000).optional(),
-});
+// `cohort` is absent from the input and added by the transform below: it is
+// read out of the student code, which is the same string as the email's local
+// part. Accepting it as a field would mean accepting a value that can
+// contradict the two others.
+const StudentCreateSchema = z
+  .object({
+    role: z.literal(Role.STUDENT),
+    email: emailSchema,
+    studentCode: trimmed(50).pipe(
+      z
+        .string()
+        .regex(
+          /^\d{7}$/,
+          'Student code must be 7 digits: 2 for the intake year, 5 for the sequence',
+        ),
+    ),
+    fullName: requiredTrimmed(255, 'Full name is required'),
+    majorId: z.number().int().positive().optional(),
+    class: trimmed(100).optional(),
+    phone: trimmed(20).optional(),
+    bio: trimmed(2000).optional(),
+  })
+  .refine((input) => studentCodeMatchesEmail(input.studentCode, input.email), {
+    path: ['email'],
+    message: 'Email must start with the student code (e.g. 2212345@dlu.edu.vn)',
+  })
+  .transform((input) => ({
+    ...input,
+    // Non-null by construction — the regex above has already checked the shape.
+    cohort: cohortFromStudentCode(input.studentCode)!,
+  }));
 
 const LecturerCreateSchema = z.object({
   role: z.literal(Role.LECTURER),
