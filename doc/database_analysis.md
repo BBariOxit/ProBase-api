@@ -36,6 +36,7 @@ Hệ thống quản lý đồ án cho sinh viên Công nghệ Thông tin (bao g�
 
 - **`users`**: `id`, `email`, `password_hash`, `role` (ADMIN, LECTURER, STUDENT), `is_active`, `created_at`, `updated_at`.
 - **`student_profiles`**: `id`, `user_id` (FK), `student_code`, `full_name`, `class`, `major_id` (FK → `majors`), `cohort`, `phone`, `bio`.
+  > _(cập nhật: `student_code` gồm **2 chữ số năm nhập học + 5 chữ số thứ tự** (`2212345`) và trùng đúng phần trước `@` của email trường. `cohort` vì vậy **được suy ra từ mã**, lưu dạng năm nhập học `"2022"`, không lấy từ ô nhập tay trong file import — cột gõ tay sẽ có cả `"2021"`, `"K45"`, `"21"` lẫn ô trống, và mọi quy tắc dựa trên nó sẽ hỏng âm thầm. Import phải từ chối dòng có email và mã lệch nhau. Số khóa chỉ là cách hiển thị: `khóa = năm nhập học − 1976`.)_
   > _(cập nhật: thêm `phone`, `bio`, `major_id` FK thay cho string cứng; hỗ trợ FR_STU_01)_
 - **`lecturer_profiles`**: `id`, `user_id` (FK), `lecturer_code`, `full_name`, `academic_title`, `phone`, `bio`, `research_interests`, `max_mentoring_quota` (Int - Số nhóm tối đa được hướng dẫn trong một học kỳ, Nullable — nếu Null thì không giới hạn).
   > _(cập nhật: thêm `phone`, `bio`, `research_interests`, `max_mentoring_quota`; hỗ trợ FR_LEC_01)_
@@ -78,8 +79,10 @@ Hệ thống quản lý đồ án cho sinh viên Công nghệ Thông tin (bao g�
   - `name` (Nullable) — Tên nhóm tự đặt.
   - `status` (FORMING → SUBMITTED → APPROVED / REJECTED).
   - `lecturer_feedback` (Nullable) — Lý do từ chối của GV.
+  - `open_for_join` (Boolean, mặc định `false`) — Nhóm có nhận thêm thành viên lạ hay không. Nhóm chưa đầy nhưng đóng thì hiển thị "Đã có nhóm nhận" thay vì "còn chỗ", để không mời gọi một chỗ đã có chủ.
+  - `topic_id` là **NOT NULL**: nhóm luôn sinh ra trên một đề tài, không tồn tại nhóm đi tìm đề tài.
   > _(cập nhật: `(topic_id, semester_id)` là **khóa ngoại tổ hợp** trỏ tới `topics(id, semester_id)`, nên học kỳ của nhóm luôn khớp học kỳ của đề tài.)_
-  > _(cập nhật: **partial unique index** `(topic_id) WHERE status = 'APPROVED'` — nhiều nhóm được phép SUBMIT vào một đề tài và GV chọn một, nhưng chỉ **một** nhóm được APPROVED. Trước đó không có gì chặn hai nhóm cùng được duyệt, phá luôn ánh xạ 1-1 ở `council_topics`.)_
+  > _(cập nhật lần 2 — đổi theo cơ chế phân bổ ở FR_STU_03a: partial unique index nới từ `(topic_id) WHERE status = 'APPROVED'` thành **`(topic_id) WHERE status <> 'REJECTED'`**. Bản cũ chỉ chặn ở bước duyệt nên nhiều nhóm vẫn chen vào được trước đó; bản mới cho **nhóm đầu tiên nhận đề tài là chủ**, nhóm thứ hai bị database từ chối ngay — không cần đếm, không cần khoá, đúng kể cả khi hàng nghìn sinh viên bấm cùng lúc lúc mở cổng. `REJECTED` nằm ngoài index nên nhóm huỷ hoặc bị từ chối tự động nhả đề tài lại cho người khác, mà vẫn giữ được dấu vết.)_
 - **`registration_group_members`**: Thành viên của nhóm đăng ký.
   - `id` (PK)
   - `group_id` (FK → `registration_groups`)

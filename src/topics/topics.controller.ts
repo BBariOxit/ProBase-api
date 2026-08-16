@@ -13,6 +13,7 @@ import { Role } from '../../generated/prisma/client';
 import { GetUser } from '../auth/decorators/get-user.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { CreateTopicDto } from './dto/create-topic.dto';
+import { QueryTopicLecturersDto } from './dto/query-topic-lecturers.dto';
 import { QueryTopicsDto } from './dto/query-topics.dto';
 import { UpdateTopicDto } from './dto/update-topic.dto';
 import { TopicsService } from './topics.service';
@@ -32,6 +33,19 @@ export class TopicsController {
     @GetUser('role') role: Role,
   ) {
     return this.topicsService.findAll(query, userId, role);
+  }
+
+  /**
+   * Declared before the `:id` route on purpose. Nest matches in order, so the
+   * parameterised route would otherwise swallow this path and hand
+   * ParseIntPipe the string "lecturers".
+   */
+  @Get('lecturers')
+  findLecturers(
+    @Query() query: QueryTopicLecturersDto,
+    @GetUser('role') role: Role,
+  ) {
+    return this.topicsService.findLecturers(role, query.semesterId);
   }
 
   @Get(':id')

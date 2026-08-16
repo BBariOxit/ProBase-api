@@ -110,6 +110,32 @@ export class TopicsService {
     };
   }
 
+  /**
+   * The lecturers a caller could usefully filter by — those who actually have
+   * a topic this caller can see, rather than every lecturer in the faculty.
+   *
+   * It lives here rather than on /users for two reasons. Listing accounts is
+   * admin-only and should stay that way: a student has no business enumerating
+   * staff records. And a filter offering names with nothing behind them is
+   * worse than no filter, because every one of those choices leads to an empty
+   * page.
+   */
+  async findLecturers(role: Role, semesterId?: number) {
+    const rows = await this.prisma.topic.findMany({
+      where: {
+        status: visibleStatusFilter(role, undefined),
+        ...(semesterId && { semesterId }),
+      },
+      select: {
+        lecturer: { select: { id: true, fullName: true, academicTitle: true } },
+      },
+      distinct: ['lecturerId'],
+      orderBy: { lecturer: { fullName: 'asc' } },
+    });
+
+    return rows.map((row) => row.lecturer);
+  }
+
   async findOne(id: number, role: Role) {
     const topic = await this.prisma.topic.findUnique({
       where: { id },
