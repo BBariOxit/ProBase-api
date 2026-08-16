@@ -106,7 +106,7 @@ async function main() {
     month >= 7 ? new Date().getFullYear() : new Date().getFullYear() - 1;
   const semesterCode = `HK1-${academicYear}-${academicYear + 1}`;
 
-  await prisma.semester.upsert({
+  const semester = await prisma.semester.upsert({
     where: { code: semesterCode },
     create: {
       code: semesterCode,
@@ -121,6 +121,34 @@ async function main() {
     update: { isActive: true },
   });
   console.log(`  semester: ${semesterCode} (registration open)`);
+
+  // Which cohort does which kind of project this semester — the mapping the
+  // faculty announces. Cơ sở goes to the third-years, Chuyên ngành to the
+  // fourth, Tốt nghiệp to the fifth, counted back from the academic year so
+  // the fixture stays right whenever it is run. The demo student's code puts
+  // them in the Chuyên ngành cohort.
+  const ELIGIBILITY: { code: string; yearsBack: number }[] = [
+    { code: 'DACS', yearsBack: 3 },
+    { code: 'DACN', yearsBack: 4 },
+    { code: 'DATN', yearsBack: 5 },
+  ];
+
+  await prisma.semesterEligibility.deleteMany({
+    where: { semesterId: semester.id },
+  });
+  for (const { code, yearsBack } of ELIGIBILITY) {
+    const projectType = await prisma.projectType.findUniqueOrThrow({
+      where: { code },
+    });
+    await prisma.semesterEligibility.create({
+      data: {
+        semesterId: semester.id,
+        projectTypeId: projectType.id,
+        cohort: String(academicYear - yearsBack + 1),
+      },
+    });
+  }
+  console.log(`  eligibility: ${ELIGIBILITY.length} cohort/type rules`);
 
   const admin = await prisma.user.upsert({
     where: { email: ADMIN_EMAIL },
