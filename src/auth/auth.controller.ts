@@ -10,6 +10,7 @@ import {
 } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { AuthService } from './auth.service';
+import { AllowTempPassword } from './decorators/allow-temp-password.decorator';
 import { GetUser } from './decorators/get-user.decorator';
 import { Public } from './decorators/public.decorator';
 import { ChangePasswordDto } from './dto/change-password.dto';
@@ -91,12 +92,18 @@ export class AuthController {
 
   // ── Session ──────────────────────────────────────────────
 
+  // Signing out has to stay reachable, or an account holding a temporary
+  // password would have no way to end its own session.
+  @AllowTempPassword()
   @Post('logout')
   @HttpCode(HttpStatus.OK)
   logout(@GetUser('id') userId: number) {
     return this.authService.logout(userId);
   }
 
+  // The client reads mustChangePassword from here to decide where to send the
+  // user, so blocking it would leave it unable to find that out.
+  @AllowTempPassword()
   @Get('me')
   getMe(@GetUser('id') userId: number) {
     return this.authService.getMe(userId);
@@ -104,6 +111,7 @@ export class AuthController {
 
   // Guessing `currentPassword` is a credential attack like any other, even
   // though the caller already holds a valid access token.
+  @AllowTempPassword()
   @Throttle(GUESSABLE_SECRET_RATE_LIMIT)
   @Patch('change-password')
   changePassword(

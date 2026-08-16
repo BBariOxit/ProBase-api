@@ -26,7 +26,16 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   async validate(payload: JwtPayload) {
     const user = await this.prisma.user.findUnique({
       where: { id: payload.sub },
-      select: { id: true, email: true, role: true, isActive: true },
+      // mustChangePassword is read here, not carried in the token: a stale
+      // claim would keep locking the account out for the rest of the token's
+      // life after the password had already been changed.
+      select: {
+        id: true,
+        email: true,
+        role: true,
+        isActive: true,
+        mustChangePassword: true,
+      },
     });
 
     if (!user || !user.isActive) return null;
