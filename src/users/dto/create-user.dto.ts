@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { Role } from '../../../generated/prisma/client';
 import { emailSchema } from '../../common/email.schema';
+import { checkClassCode } from '../class-code.util';
 import {
   cohortFromStudentCode,
   studentCodeMatchesEmail,
@@ -46,6 +47,19 @@ const StudentCreateSchema = z
     path: ['email'],
     message: 'Email must start with the student code (e.g. 2212345@dlu.edu.vn)',
   })
+  // A class code carries the intake too (`CTK46PM`), so it is a third claim
+  // about the same fact and gets checked against the code like the email does.
+  // An unrecognised shape is accepted — the faculty runs classes this pattern
+  // does not cover — but a contradiction means one of the two is a typo.
+  .refine(
+    (input) =>
+      checkClassCode(input.class, input.studentCode).status !== 'contradiction',
+    {
+      path: ['class'],
+      message:
+        'Class code and student code disagree about the intake year — fix whichever is wrong',
+    },
+  )
   .transform((input) => ({
     ...input,
     // Non-null by construction — the regex above has already checked the shape.

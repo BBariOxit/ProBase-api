@@ -42,6 +42,17 @@ export function khoaFromCohort(cohort: string): number {
 }
 
 /**
+ * 46 → "2022". The inverse of the above, for reading a cohort back out of the
+ * one place that writes it in K-form: the class code (`CTK46PM`).
+ *
+ * It lives here so COHORT_EPOCH stays a single institutional fact rather than a
+ * number repeated wherever somebody needs to convert.
+ */
+export function cohortFromKhoa(khoa: number): string {
+  return String(khoa + COHORT_EPOCH);
+}
+
+/**
  * The email's local part must be the student code. They are the same string
  * at the university, so a row where they differ is a spreadsheet mistake — and
  * silently trusting either one would put the wrong cohort on the account.

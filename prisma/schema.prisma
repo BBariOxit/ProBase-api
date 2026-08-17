@@ -30,6 +30,46 @@ enum AllocationMode {
   PREFERENCE_ROUND
 }
 
+/// The four stages a semester's registration passes through.
+///
+/// This is a stored column rather than something derived from
+/// `registrationEnd`, and that is the point of it. A date can say the gate has
+/// closed, but nothing about a date can record that the office has *finished*
+/// placing the students who ended up without a group — so RECONCILING would
+/// never end. Dates are the trigger; this column is the truth.
+enum SemesterPhase {
+  /// Lecturers write topics; students can look but not register.
+  PREP
+
+  /// Students register and form groups. Staff keep their hands off.
+  OPEN
+
+  /// The gate has closed. Students are read-only and the faculty office places
+  /// whoever has no group.
+  RECONCILING
+
+  /// Allocation is final and project work begins.
+  FINALIZED
+}
+
+/// How a student came to be in a group.
+///
+/// Kept because the counts are the only way to answer "how many did we have to
+/// place by hand last semester" — the question the faculty asks every year, and
+/// the only real measure of whether free registration is doing its job.
+/// ASSIGNED also tells a supervisor which of their students chose the topic and
+/// which were put there.
+enum GroupJoinSource {
+  /// Pressed register or join on the topic themselves.
+  SELF
+
+  /// Came in through a group's join link while its seats were held.
+  LINK
+
+  /// Placed by the faculty office during RECONCILING.
+  ASSIGNED
+}
+
 enum TopicProposalStatus {
   PENDING
   ACCEPTED
@@ -107,6 +147,9 @@ model User {
   refreshTokens   RefreshToken[]
   passwordResetTokens PasswordResetToken[]
 
+  semestersFinalised Semester[]                @relation("SemesterFinalisedBy")
+  membersAssigned    RegistrationGroupMember[] @relation("GroupMemberAssignedBy")
+
   @@map("users")
 }
 
@@ -116,10 +159,15 @@ model StudentProfile {
   majorId     Int?
   studentCode String  @unique
   fullName    String
-  class       String?
+  class       String? // e.g. "CTK46PM" — cross-checked against cohort and major on import
   cohort      String? // e.g. "2021"
   phone       String?
   bio         String?
+
+  /// Free-text note kept by the faculty office ("deferred HK1", "rang, no
+  /// answer"). Every real administrative system needs one: without it the
+  /// information moves to somebody's private spreadsheet and leaves the system.
+  note        String? @db.Text
 
   // Relations
   user  User   @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -195,12 +243,21 @@ model Semester {
 
   allocationMode AllocationMode @default(FIRST_COME)
 
+  phase SemesterPhase @default(PREP)
+
+  // Who ended the RECONCILING phase and when. Finalising allocation turns every
+  // group's membership into the official record, so it is an event with an
+  // author rather than a flag that flips.
+  finalisedAt   DateTime?
+  finalisedById Int?
+
   // Relations
   topics             Topic[]
   topicProposals     TopicProposal[]
   registrationGroups RegistrationGroup[]
   councils           Council[]
   eligibilities      SemesterEligibility[]
+  finalisedBy        User?                 @relation("SemesterFinalisedBy", fields: [finalisedById], references: [id], onDelete: SetNull)
 
   @@map("semesters")
 }
@@ -320,13 +377,39 @@ model RegistrationGroup {
   status          RegistrationGroupStatus @default(FORMING)
   lecturerFeedback String?                @db.Text
 
-  /// Whether strangers may take the group's remaining seats.
+  /// Whether the group is still willing to take anyone else.
   ///
-  /// Defaults to closed, because students agree on a team before they register
-  /// and a seat already promised to a friend is not really free. Showing
-  /// "2/3 · còn chỗ" for such a group would be the interface telling a lie, so
-  /// a closed group reads as taken however many seats sit unused.
-  openForJoin     Boolean                 @default(false)
+  /// Open by default: free joining is the model, and a group that fills up is
+  /// closed by `maxStudents` rather than by this flag. The leader turns it off
+  /// to mean "we are going with two, do not send us a third" — at which point
+  /// the topic reads as taken however many seats sit unused, because offering a
+  /// seat the group will not accept is the interface telling a lie.
+  ///
+  /// Note this is only half the answer: during the hold window below, a group
+  /// is open in principle but reachable only through its join link.
+  openForJoin     Boolean                 @default(true)
+
+  /// How many students the leader said they intend to bring, if they said.
+  ///
+  /// Null means they did not, and the seats were never held at all.
+  declaredSize    Int?
+
+  /// When the held seats stop being held. Null, or a time already past, means
+  /// the remaining seats are open to anyone.
+  ///
+  /// A deadline rather than a state, deliberately: it expires by itself, so no
+  /// cancellation path — a member leaving, a group disbanding, an account being
+  /// locked — has to remember to undo it. Everything that frees a seat reopens
+  /// the topic without a line of code recalling that it should.
+  holdUntil       DateTime?
+
+  /// The secret in the group's join link.
+  ///
+  /// Cryptographically random, because a guessable one would let a stranger
+  /// walk into exactly the seat being held for a friend. Kept after the hold
+  /// expires so an old link still resolves to the right group rather than
+  /// 404ing — by then it grants nothing the topic page does not.
+  joinCode        String?                 @unique
 
   createdAt       DateTime                @default(now())
   updatedAt       DateTime                @updatedAt
@@ -355,15 +438,30 @@ model RegistrationGroupMember {
   // two tables. The composite foreign key keeps it honest.
   semesterId   Int
   studentId    Int
-  status       GroupMemberStatus @default(INVITED)
+
+  /// Only ACCEPTED is written now that joining is a single action: a student is
+  /// either in the group or not. INVITED and DECLINED stay in the enum because
+  /// the partial unique index below is defined in terms of ACCEPTED and rows
+  /// from the invitation model may still exist.
+  status       GroupMemberStatus @default(ACCEPTED)
+
+  joinSource   GroupJoinSource   @default(SELF)
+
+  // Only set for joinSource = ASSIGNED. Points at User rather than
+  // LecturerProfile because the faculty office places students, and it does so
+  // from an ADMIN account.
+  assignedById Int?
+  assignedAt   DateTime?
+
   mentorGrade  Float?            // Per-student grade from supervising lecturer
   mentorComment String?          @db.Text
-  joinedAt     DateTime?         // Set when member accepts the invitation
+  joinedAt     DateTime?         // When the student came into the group
   createdAt    DateTime          @default(now())
 
   // Relations
-  group   RegistrationGroup @relation(fields: [groupId, semesterId], references: [id, semesterId], onDelete: Cascade)
-  student StudentProfile    @relation(fields: [studentId], references: [id], onDelete: Restrict)
+  group      RegistrationGroup @relation(fields: [groupId, semesterId], references: [id, semesterId], onDelete: Cascade)
+  student    StudentProfile    @relation(fields: [studentId], references: [id], onDelete: Restrict)
+  assignedBy User?             @relation("GroupMemberAssignedBy", fields: [assignedById], references: [id], onDelete: SetNull)
 
   @@unique([groupId, studentId])
   // A partial unique index in the migration adds the rule this cannot express:

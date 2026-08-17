@@ -15,6 +15,7 @@ import { UpdateUserDto } from './dto/update-user.dto';
 import { UpsertLecturerProfileDto } from './dto/upsert-lecturer-profile.dto';
 import { UpsertStudentProfileDto } from './dto/upsert-student-profile.dto';
 import { mapWithConcurrency } from '../common/concurrency.util';
+import { checkClassCode } from './class-code.util';
 import {
   formatImportRowError,
   ImportRowSchema,
@@ -31,6 +32,8 @@ interface ValidatedImportRow {
   /** Resolved from majorCode on STUDENT rows; absent on LECTURER rows, which
    *  have no master-data relation to resolve. */
   majorId?: number;
+  /** Things worth telling the admin about a row that was still accepted. */
+  warnings?: string[];
 }
 
 /** A validated row that also has its generated credentials ready to insert. */
@@ -46,6 +49,9 @@ export interface BulkImportRowResult {
   reason?: string;
   /** Created rows only: whether the credentials email actually went out. */
   emailSent?: boolean;
+  /** Accepted, but with something the admin should look at — an unrecognised
+   *  class code, for instance. Absent when there was nothing to say. */
+  warnings?: string[];
 }
 
 export interface BulkImportResult {
@@ -59,6 +65,11 @@ export interface BulkImportResult {
    * rather than something the admin has to spot by scanning rows.
    */
   emailsFailedCount: number;
+  /**
+   * Rows that imported with a caveat. Surfaced as a count so the admin knows to
+   * look without having to scan every accepted row for a `warnings` key.
+   */
+  warnedCount: number;
   created: BulkImportRowResult[];
   failed: BulkImportRowResult[];
 }
@@ -322,6 +333,7 @@ export class UsersService {
           row: row.rowNumber,
           email: row.data.email,
           role: row.data.role,
+          ...(row.warnings?.length && { warnings: row.warnings }),
         };
         created.push(result);
         pendingEmails.push({
@@ -358,6 +370,7 @@ export class UsersService {
       createdCount: created.length,
       failedCount: failed.length,
       emailsFailedCount: created.filter((row) => !row.emailSent).length,
+      warnedCount: created.filter((row) => row.warnings?.length).length,
       created,
       failed,
     };
@@ -570,6 +583,12 @@ export class UsersService {
     // Student and lecturer codes live in separate tables with separate unique
     // indexes, so the same string under both roles is not a collision.
     const codesSeenInFile = new Set<string>();
+    // One class belongs to one major, so the first row to use a class code sets
+    // what that code means for the rest of the file. This is the only check
+    // available on the major half of a class code: its suffix (`PM`) is not the
+    // major's own code (`KTPM`), and the faculty's mapping between them is not
+    // data the system holds.
+    const majorByClassCode = new Map<string, { code: string; row: number }>();
 
     for (const raw of rows) {
       const parsed = ImportRowSchema.safeParse(toImportRowInput(raw.values));
@@ -609,6 +628,7 @@ export class UsersService {
       // Only students carry a master-data reference; a lecturer row is
       // self-contained now that bộ môn is gone.
       let majorId: number | undefined;
+      const warnings: string[] = [];
       if (data.role === 'STUDENT') {
         majorId = majorIdByCode.get(data.majorCode);
         if (majorId === undefined) {
@@ -619,9 +639,50 @@ export class UsersService {
           });
           continue;
         }
+
+        const classCheck = checkClassCode(data.class, data.code);
+
+        if (classCheck.status === 'contradiction') {
+          failed.push({
+            row: raw.rowNumber,
+            email: data.email,
+            reason: classCheck.error,
+          });
+          continue;
+        }
+
+        if (classCheck.status === 'unrecognised') {
+          warnings.push(classCheck.warning);
+        }
+
+        if (classCheck.status === 'ok') {
+          const { normalised } = classCheck.parsed;
+          const claimed = majorByClassCode.get(normalised);
+
+          if (claimed && claimed.code !== data.majorCode) {
+            failed.push({
+              row: raw.rowNumber,
+              email: data.email,
+              reason: `class "${data.class}" was majorCode "${claimed.code}" on row ${claimed.row} but "${data.majorCode}" here — one class cannot be two majors`,
+            });
+            continue;
+          }
+
+          if (!claimed) {
+            majorByClassCode.set(normalised, {
+              code: data.majorCode,
+              row: raw.rowNumber,
+            });
+          }
+        }
       }
 
-      valid.push({ rowNumber: raw.rowNumber, data, majorId });
+      valid.push({
+        rowNumber: raw.rowNumber,
+        data,
+        majorId,
+        ...(warnings.length && { warnings }),
+      });
     }
 
     return { valid, failed };

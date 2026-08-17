@@ -50,9 +50,9 @@ Hệ thống quản lý đồ án cho sinh viên Công nghệ Thông tin (bao g�
 
 - **`semesters`**: `id`, `name`, `code`, `start_date`, `end_date`, `registration_start` (Thời điểm mở đăng ký), `registration_end` (Thời điểm đóng đăng ký), `grade_submission_deadline` (Deadline chốt điểm — sau mốc này điểm bị khóa), `is_active`, `mentor_weight`, `reviewer_weight`, `council_weight` (Float — trọng số tính điểm tổng kết, mặc định 0.4/0.3/0.3, tổng bằng 1).
   > _(cập nhật: thêm `registration_start`, `registration_end`; hỗ trợ FR_ADM_03)_
-  > _(cập nhật: thêm **`phase`** (PREP, OPEN, RECONCILING, FINALIZED), **`finalized_at`** và **`finalized_by_id`** (FK → `users`, Nullable) — hỗ trợ mục 1.0 và FR_ADM_07._
+  > _(cập nhật: thêm **`phase`** (PREP, OPEN, RECONCILING, FINALIZED), **`finalised_at`** và **`finalised_by_id`** (FK → `users`, Nullable) — hỗ trợ mục 1.0 và FR_ADM_07._
   >
-  > _`phase` là **cột thật, không phải phép so sánh ngày**. Suy pha thuần từ `registration_end` thì pha `RECONCILING` không bao giờ kết thúc được: không có chỗ nào ghi nhận việc phân bổ đã xong. Ngày tháng là mốc kích hoạt, cột này là sự thật. `OPEN → RECONCILING` được đẩy **lúc đọc** (lazy) nên không cần scheduler; `RECONCILING → FINALIZED` bắt buộc là một sự kiện có người bấm, và `finalized_by_id` + `finalized_at` là dấu vết của nó._
+  > _`phase` là **cột thật, không phải phép so sánh ngày**. Suy pha thuần từ `registration_end` thì pha `RECONCILING` không bao giờ kết thúc được: không có chỗ nào ghi nhận việc phân bổ đã xong. Ngày tháng là mốc kích hoạt, cột này là sự thật. `OPEN → RECONCILING` được đẩy **lúc đọc** (lazy) nên không cần scheduler; `RECONCILING → FINALIZED` bắt buộc là một sự kiện có người bấm, và `finalised_by_id` + `finalised_at` là dấu vết của nó._
   >
   > _Không có cột `coordinator_id`, và **không có role thứ tư**: việc xếp sinh viên thuộc về vai **ADMIN (giáo vụ khoa)** đã có sẵn. Lý do là quyền hạn, không phải năng lực — một em chưa có nhóm gần như luôn phải xếp vào đề tài của thầy khác, nên không giảng viên nào nên có quyền đó. Đây cũng đúng loại việc ADMIN đã làm khi phân bổ nhóm vào hội đồng bảo vệ.)_
   > _(cập nhật: thêm 3 trọng số điểm — công thức tính điểm tổng kết là **dữ liệu theo học kỳ**, không hardcode trong code, để đổi trọng số kỳ sau không tính lại điểm các kỳ đã đóng)_
@@ -249,8 +249,8 @@ erDiagram
         date grade_submission_deadline
         date start_date
         date end_date
-        date finalized_at
-        int finalized_by_id FK
+        date finalised_at
+        int finalised_by_id FK
         float mentor_weight
         float reviewer_weight
         float council_weight

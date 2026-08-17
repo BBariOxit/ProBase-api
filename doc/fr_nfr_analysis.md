@@ -25,7 +25,7 @@ Ba điểm thiết kế bắt buộc:
 
 - **Pha là một cột trong `semesters`, không phải một phép so sánh ngày.** Nếu suy pha thuần từ `registration_end` thì pha `RECONCILING` không bao giờ kết thúc được: không có chỗ nào ghi nhận việc phân bổ đã xong. Ngày tháng là **mốc kích hoạt**, cột `phase` là **sự thật**.
 - **`OPEN → RECONCILING` tự động và kiểm lúc đọc** (lazy), không cần scheduler: truy vấn nào chạm vào học kỳ thì đẩy pha nếu đã quá hạn. Cùng cơ chế với việc hết hạn giữ chỗ ở FR_STU_03a.
-- **`RECONCILING → FINALIZED` là sự kiện có người bấm**, ghi lại ai bấm và lúc nào (`finalized_by_id`, `finalized_at`). Đây là thời điểm kết quả phân bổ trở thành chính thức.
+- **`RECONCILING → FINALIZED` là sự kiện có người bấm**, ghi lại ai bấm và lúc nào (`finalised_by_id`, `finalised_at`). Đây là thời điểm kết quả phân bổ trở thành chính thức.
 
 ### 1.1. Đối với Sinh viên (Student)
 
