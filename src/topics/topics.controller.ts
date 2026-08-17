@@ -49,8 +49,12 @@ export class TopicsController {
   }
 
   @Get(':id')
-  findOne(@Param('id', ParseIntPipe) id: number, @GetUser('role') role: Role) {
-    return this.topicsService.findOne(id, role);
+  findOne(
+    @Param('id', ParseIntPipe) id: number,
+    @GetUser('id') userId: number,
+    @GetUser('role') role: Role,
+  ) {
+    return this.topicsService.findOne(id, userId, role);
   }
 
   @Roles('LECTURER')

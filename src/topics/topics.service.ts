@@ -95,19 +95,19 @@ type TopicWithGroups = {
 function withActiveGroup<T extends TopicWithGroups>(
   topic: T,
   /**
-   * The semester's phase, when the caller knows it.
+   * What this particular caller may do, when the caller is known.
    *
-   * Both booleans are false outside OPEN, because "can" has to mean the same
-   * thing the API means. Reporting a topic as registrable while the gate is shut
-   * would put a live button in front of a request that is certain to be refused —
+   * Both booleans mean "the API would accept this from you", not "a seat exists"
+   * — so everything the register endpoint checks has to be reflected here.
+   * Anything less puts a live button in front of a request certain to be refused,
    * and the browse screen has no way to know better, since availability is
    * exactly what it is asking this endpoint for.
    */
-  phase?: SemesterPhase,
+  viewer?: { gateOpen: boolean; eligible: boolean },
 ) {
   const { registrationGroups, ...rest } = topic;
   const group = registrationGroups[0];
-  const gateOpen = phase === undefined || phase === SemesterPhase.OPEN;
+  const allowed = viewer === undefined || (viewer.gateOpen && viewer.eligible);
 
   if (!group) {
     return {
@@ -116,7 +116,7 @@ function withActiveGroup<T extends TopicWithGroups>(
       occupiedSeats: 0,
       isFull: false,
       /** Nobody holds it: the first student to press register takes it. */
-      canRegister: gateOpen,
+      canRegister: allowed,
       canJoin: false,
     };
   }
@@ -150,7 +150,7 @@ function withActiveGroup<T extends TopicWithGroups>(
     isFull: full,
     canRegister: false,
     canJoin:
-      gateOpen &&
+      allowed &&
       !full &&
       group.openForJoin &&
       topic.maxStudents - occupied - held > 0,
@@ -215,6 +215,10 @@ export class TopicsService {
       where.lecturerId = query.lecturerId;
     }
 
+    if (query.forMyCohort) {
+      where.projectTypeId = { in: await this.eligibleProjectTypeIds(userId) };
+    }
+
     const [items, total] = await this.prisma.$transaction([
       this.prisma.topic.findMany({
         where,
@@ -226,18 +230,10 @@ export class TopicsService {
       this.prisma.topic.count({ where }),
     ]);
 
-    // Resolved rather than read off the joined row, so that a gate which closed
-    // a minute ago is closed here too — the phase advances on being asked, and a
-    // page of buttons is a bad place to be the last to find out. One lookup per
-    // distinct semester, which on this screen is almost always one.
-    const phases = await this.resolvePhases(
-      items.map((topic) => topic.semester.id),
-    );
+    const viewers = await this.availabilityFor(items, userId, role);
 
     return {
-      items: items.map((topic) =>
-        withActiveGroup(topic, phases.get(topic.semester.id)),
-      ),
+      items: items.map((topic) => withActiveGroup(topic, viewers(topic))),
       total,
       page: query.page,
       limit: query.limit,
@@ -245,13 +241,83 @@ export class TopicsService {
     };
   }
 
-  private async resolvePhases(semesterIds: number[]) {
-    const distinct = [...new Set(semesterIds)];
-    const resolved = await Promise.all(
-      distinct.map(async (id) => [id, await this.phases.resolve(id)] as const),
+  /**
+   * The project types the caller's intake may take, across every semester.
+   *
+   * Fails closed: an account with no intake on file, or an office that has not
+   * declared the rules yet, gets an empty list rather than the whole catalogue.
+   * The filter exists to show a student what is actually theirs, and guessing
+   * generously here would defeat it.
+   */
+  private async eligibleProjectTypeIds(userId: number) {
+    const profile = await this.prisma.studentProfile.findUnique({
+      where: { userId },
+      select: { cohort: true },
+    });
+
+    if (!profile?.cohort) return [];
+
+    const rules = await this.prisma.semesterEligibility.findMany({
+      where: { cohort: profile.cohort },
+      select: { projectTypeId: true },
+      distinct: ['projectTypeId'],
+    });
+
+    return rules.map((rule) => rule.projectTypeId);
+  }
+
+  /**
+   * Builds the per-topic answer to "would the API accept a registration from
+   * this caller", in two queries rather than two per row.
+   *
+   * Staff get no answer at all — `undefined` leaves the flags describing the
+   * topic rather than a viewer, because a lecturer reading their own list is not
+   * a candidate for a seat and blanking the fields would just look broken.
+   */
+  private async availabilityFor(
+    items: { semester: { id: number }; projectType: { id: number } }[],
+    userId: number,
+    role: Role,
+  ) {
+    if (role !== Role.STUDENT || items.length === 0) return () => undefined;
+
+    // Resolved rather than read off the joined row, so a gate that closed a
+    // minute ago is closed here too: the phase advances on being asked, and a
+    // page of buttons is a bad place to be the last to find out.
+    const semesterIds = [...new Set(items.map((topic) => topic.semester.id))];
+    const phases = new Map(
+      await Promise.all(
+        semesterIds.map(
+          async (id) => [id, await this.phases.resolve(id)] as const,
+        ),
+      ),
     );
 
-    return new Map(resolved);
+    const profile = await this.prisma.studentProfile.findUnique({
+      where: { userId },
+      select: { cohort: true },
+    });
+
+    // One query for every rule on the page, keyed the way it is asked.
+    const rules = profile?.cohort
+      ? await this.prisma.semesterEligibility.findMany({
+          where: { semesterId: { in: semesterIds }, cohort: profile.cohort },
+          select: { semesterId: true, projectTypeId: true },
+        })
+      : [];
+    const eligible = new Set(
+      rules.map((rule) => `${rule.semesterId}:${rule.projectTypeId}`),
+    );
+
+    return (topic: {
+      semester: { id: number };
+      projectType: { id: number };
+    }) => ({
+      gateOpen: phases.get(topic.semester.id) === SemesterPhase.OPEN,
+      // The register endpoint refuses a project type the caller's intake is not
+      // open for, so a button offering it here would be a button that lies.
+      eligible: eligible.has(`${topic.semester.id}:${topic.projectType.id}`),
+    });
   }
 
   /**
@@ -280,7 +346,7 @@ export class TopicsService {
     return rows.map((row) => row.lecturer);
   }
 
-  async findOne(id: number, role: Role) {
+  async findOne(id: number, userId: number, role: Role) {
     const topic = await this.prisma.topic.findUnique({
       where: { id },
       include: DETAIL_INCLUDE,
@@ -297,12 +363,14 @@ export class TopicsService {
     // here as well would quietly overrule an office that opened registration
     // early or held it shut, which the phase exists to let them do.
     const phase = await this.phases.resolve(topic.semesterId);
+    const viewer = await this.availabilityFor([topic], userId, role);
 
     return {
-      ...withActiveGroup(topic),
+      ...withActiveGroup(topic, viewer(topic)),
       semesterPhase: phase,
       // Saves the client a second request to the semester just to decide whether
-      // the register button should be live.
+      // the register button should be live. This one is about the topic and the
+      // calendar only — whether *this* caller may take it is canRegister/canJoin.
       isRegistrationOpen:
         topic.status === TopicStatus.OPEN && phase === SemesterPhase.OPEN,
     };
