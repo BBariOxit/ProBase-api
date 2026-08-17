@@ -10,7 +10,7 @@ export const UpdateUserSchema = z
     isActive: z.boolean().optional(),
   })
   .refine((data) => Object.keys(data).length > 0, {
-    message: 'At least one field must be provided',
+    message: 'Cần cung cấp ít nhất một trường để cập nhật',
   });
 
 export class UpdateUserDto extends createZodDto(UpdateUserSchema) {}

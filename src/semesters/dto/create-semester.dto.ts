@@ -3,10 +3,10 @@ import { createZodDto } from 'nestjs-zod';
 
 export const CreateSemesterSchema = z
   .object({
-    name: z.string().min(1, 'Semester name is required').max(255),
+    name: z.string().min(1, 'Vui lòng nhập tên học kỳ').max(255),
     code: z
       .string()
-      .min(1, 'Semester code is required')
+      .min(1, 'Vui lòng nhập mã học kỳ')
       .max(50)
       .transform((val) => val.toUpperCase()),
     startDate: z.coerce.date(),
@@ -16,11 +16,11 @@ export const CreateSemesterSchema = z
     gradeSubmissionDeadline: z.coerce.date().optional(),
   })
   .refine((data) => data.endDate > data.startDate, {
-    message: 'End date must be after start date',
+    message: 'Ngày kết thúc phải sau ngày bắt đầu',
     path: ['endDate'],
   })
   .refine((data) => data.registrationEnd > data.registrationStart, {
-    message: 'Registration end must be after registration start',
+    message: 'Ngày kết thúc đăng ký phải sau ngày mở đăng ký',
     path: ['registrationEnd'],
   });
 

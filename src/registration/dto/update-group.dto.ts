@@ -34,7 +34,7 @@ export const UpdateGroupSchema = z
   .refine(
     (input) => Object.values(input).some((value) => value !== undefined),
     {
-      message: 'Nothing to update',
+      message: 'Không có thay đổi nào để lưu',
     },
   );
 

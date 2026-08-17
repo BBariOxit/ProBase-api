@@ -22,12 +22,12 @@ export const UpsertStudentProfileSchema = z
           .string()
           .regex(
             /^\d{7}$/,
-            'Student code must be 7 digits: 2 for the intake year, 5 for the sequence',
+            'Mã sinh viên phải gồm 7 chữ số: 2 số khoá và 5 số thứ tự',
           ),
       ),
     fullName: z
       .string()
-      .min(1, 'Full name is required')
+      .min(1, 'Vui lòng nhập họ tên')
       .max(255)
       .transform((val) => val.trim()),
     majorId: z.number().int().positive().optional().nullable(),
@@ -48,7 +48,7 @@ export const UpsertStudentProfileSchema = z
     {
       path: ['class'],
       message:
-        'Class code and student code disagree about the intake year — fix whichever is wrong',
+        'Mã lớp và mã sinh viên không khớp năm khoá — sửa lại cái nào sai',
     },
   )
   .transform((input) => ({
