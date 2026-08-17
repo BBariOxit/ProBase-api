@@ -109,6 +109,17 @@ function withActiveGroup<T extends TopicWithGroups>(
   const group = registrationGroups[0];
   const allowed = viewer === undefined || (viewer.gateOpen && viewer.eligible);
 
+  /**
+   * Whether this caller's intake may take this kind of project, or null when the
+   * question does not apply to them.
+   *
+   * Sent separately from the two booleans because "you cannot have this" and
+   * "somebody else has this" are different facts, and a screen with only
+   * canRegister/canJoin to go on cannot tell them apart — it would end up calling
+   * an unclaimed topic taken.
+   */
+  const eligibleForMe = viewer?.eligible ?? null;
+
   if (!group) {
     return {
       ...rest,
@@ -118,6 +129,7 @@ function withActiveGroup<T extends TopicWithGroups>(
       /** Nobody holds it: the first student to press register takes it. */
       canRegister: allowed,
       canJoin: false,
+      eligibleForMe,
     };
   }
 
@@ -154,6 +166,7 @@ function withActiveGroup<T extends TopicWithGroups>(
       !full &&
       group.openForJoin &&
       topic.maxStudents - occupied - held > 0,
+    eligibleForMe,
   };
 }
 
