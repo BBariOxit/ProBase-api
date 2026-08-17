@@ -92,9 +92,22 @@ type TopicWithGroups = {
  * browse screen have to reimplement the seat arithmetic: getting it wrong there
  * means offering a seat that the API will then refuse.
  */
-function withActiveGroup<T extends TopicWithGroups>(topic: T) {
+function withActiveGroup<T extends TopicWithGroups>(
+  topic: T,
+  /**
+   * The semester's phase, when the caller knows it.
+   *
+   * Both booleans are false outside OPEN, because "can" has to mean the same
+   * thing the API means. Reporting a topic as registrable while the gate is shut
+   * would put a live button in front of a request that is certain to be refused —
+   * and the browse screen has no way to know better, since availability is
+   * exactly what it is asking this endpoint for.
+   */
+  phase?: SemesterPhase,
+) {
   const { registrationGroups, ...rest } = topic;
   const group = registrationGroups[0];
+  const gateOpen = phase === undefined || phase === SemesterPhase.OPEN;
 
   if (!group) {
     return {
@@ -103,7 +116,7 @@ function withActiveGroup<T extends TopicWithGroups>(topic: T) {
       occupiedSeats: 0,
       isFull: false,
       /** Nobody holds it: the first student to press register takes it. */
-      canRegister: true,
+      canRegister: gateOpen,
       canJoin: false,
     };
   }
@@ -137,7 +150,10 @@ function withActiveGroup<T extends TopicWithGroups>(topic: T) {
     isFull: full,
     canRegister: false,
     canJoin:
-      !full && group.openForJoin && topic.maxStudents - occupied - held > 0,
+      gateOpen &&
+      !full &&
+      group.openForJoin &&
+      topic.maxStudents - occupied - held > 0,
   };
 }
 
@@ -210,13 +226,32 @@ export class TopicsService {
       this.prisma.topic.count({ where }),
     ]);
 
+    // Resolved rather than read off the joined row, so that a gate which closed
+    // a minute ago is closed here too — the phase advances on being asked, and a
+    // page of buttons is a bad place to be the last to find out. One lookup per
+    // distinct semester, which on this screen is almost always one.
+    const phases = await this.resolvePhases(
+      items.map((topic) => topic.semester.id),
+    );
+
     return {
-      items: items.map(withActiveGroup),
+      items: items.map((topic) =>
+        withActiveGroup(topic, phases.get(topic.semester.id)),
+      ),
       total,
       page: query.page,
       limit: query.limit,
       totalPages: Math.ceil(total / query.limit),
     };
+  }
+
+  private async resolvePhases(semesterIds: number[]) {
+    const distinct = [...new Set(semesterIds)];
+    const resolved = await Promise.all(
+      distinct.map(async (id) => [id, await this.phases.resolve(id)] as const),
+    );
+
+    return new Map(resolved);
   }
 
   /**
