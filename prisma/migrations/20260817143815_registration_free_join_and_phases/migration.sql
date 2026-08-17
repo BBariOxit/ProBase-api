@@ -77,10 +77,18 @@ ALTER TABLE "registration_group_members" ADD CONSTRAINT "registration_group_memb
 -- A semester past its end date becomes FINALIZED with no `finalisedById`,
 -- because nobody pressed anything — this migration inferred it. That the author
 -- is null says so, which is better than inventing one.
+--
+-- Note `now() AT TIME ZONE 'UTC'` rather than a bare `now()`. These columns are
+-- `timestamp without time zone` and Prisma writes them as UTC, but comparing one
+-- against `now()` (which carries a zone) makes Postgres reinterpret the stored
+-- value as local time — so on a server set to anything but UTC the comparison is
+-- silently off by the offset, and a semester near a boundary lands in the wrong
+-- phase. Both sides are kept naive-UTC so the arithmetic matches how the value
+-- was written.
 -- ─────────────────────────────────────────────────────────
 UPDATE "semesters" SET "phase" = (CASE
-  WHEN now() > "endDate"            THEN 'FINALIZED'
-  WHEN now() < "registrationStart"  THEN 'PREP'
-  WHEN now() <= "registrationEnd"   THEN 'OPEN'
+  WHEN (now() AT TIME ZONE 'UTC') >  "endDate"           THEN 'FINALIZED'
+  WHEN (now() AT TIME ZONE 'UTC') <  "registrationStart" THEN 'PREP'
+  WHEN (now() AT TIME ZONE 'UTC') <= "registrationEnd"   THEN 'OPEN'
   ELSE 'RECONCILING'
 END)::"SemesterPhase";
