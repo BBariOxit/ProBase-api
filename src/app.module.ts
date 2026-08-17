@@ -9,6 +9,7 @@ import { MailModule } from './mail/mail.module';
 import { MajorsModule } from './majors/majors.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { ProjectTypesModule } from './project-types/project-types.module';
+import { RegistrationModule } from './registration/registration.module';
 import { SemestersModule } from './semesters/semesters.module';
 import { TopicsModule } from './topics/topics.module';
 import { UsersModule } from './users/users.module';
@@ -31,6 +32,7 @@ import { UsersModule } from './users/users.module';
     SemestersModule,
     ProjectTypesModule,
     TopicsModule,
+    RegistrationModule,
     UsersModule,
     MailModule,
   ],

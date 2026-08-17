@@ -9,9 +9,11 @@ import {
   Prisma,
   RegistrationGroupStatus,
   Role,
+  SemesterPhase,
   TopicStatus,
 } from '../../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { SemesterPhaseService } from '../semesters/semester-phase.service';
 import { CreateTopicDto } from './dto/create-topic.dto';
 import { QueryTopicsDto } from './dto/query-topics.dto';
 import { UpdateTopicDto } from './dto/update-topic.dto';
@@ -31,30 +33,26 @@ const PUBLISHED_STATUSES = [
 /**
  * The one group that currently holds a topic, if any.
  *
- * A plain count of registration_groups is the wrong question now. Since the
- * allocation model changed, at most one group can be live on a topic — so a
- * count can only ever be nought or one — and REJECTED rows are kept on purpose
- * for the record, which means the count reports groups that walked away as
- * though they were still there.
+ * A plain count of registration_groups is the wrong question. At most one group
+ * can be live on a topic — so a count can only ever be nought or one — and
+ * REJECTED rows are kept on purpose for the record, which means counting them
+ * reports groups that walked away as though they were still there.
  *
- * Seats are ACCEPTED members plus outstanding INVITED ones, because an
- * invitation holds its seat until it is answered or expires.
+ * Seats are simply the members: joining is one action now, so a row exists only
+ * once somebody is actually in. `openForJoin` and `holdUntil` come along because
+ * a seat being unoccupied is not the same as a seat being available to the person
+ * looking at it.
  */
 const ACTIVE_GROUP_SELECT = {
   where: { status: { not: RegistrationGroupStatus.REJECTED } },
   select: {
     id: true,
     status: true,
+    openForJoin: true,
+    declaredSize: true,
+    holdUntil: true,
     _count: {
-      select: {
-        members: {
-          where: {
-            status: {
-              in: [GroupMemberStatus.INVITED, GroupMemberStatus.ACCEPTED],
-            },
-          },
-        },
-      },
+      select: { members: { where: { status: GroupMemberStatus.ACCEPTED } } },
     },
   },
   take: 1,
@@ -74,31 +72,72 @@ const LIST_SELECT = {
 } satisfies Prisma.TopicSelect;
 
 type TopicWithGroups = {
+  maxStudents: number;
   registrationGroups: {
     id: number;
     status: RegistrationGroupStatus;
+    openForJoin: boolean;
+    declaredSize: number | null;
+    holdUntil: Date | null;
     _count: { members: number };
   }[];
 };
 
 /**
- * Flattens the at-most-one live group into a field the client can read
- * directly. An array of one is an implementation detail of how the constraint
- * is expressed, not something every caller should have to unwrap.
+ * Flattens the at-most-one live group into fields the client can read directly,
+ * including which of the two buttons to offer.
+ *
+ * An array of one is an implementation detail of how the constraint is
+ * expressed, not something every caller should have to unwrap. Nor should the
+ * browse screen have to reimplement the seat arithmetic: getting it wrong there
+ * means offering a seat that the API will then refuse.
  */
 function withActiveGroup<T extends TopicWithGroups>(topic: T) {
   const { registrationGroups, ...rest } = topic;
   const group = registrationGroups[0];
 
+  if (!group) {
+    return {
+      ...rest,
+      activeGroup: null,
+      occupiedSeats: 0,
+      isFull: false,
+      /** Nobody holds it: the first student to press register takes it. */
+      canRegister: true,
+      canJoin: false,
+    };
+  }
+
+  const occupied = group._count.members;
+  const full = occupied >= topic.maxStudents;
+  const holding = group.holdUntil !== null && group.holdUntil > new Date();
+
+  // Seats above the declared size were never the leader's to keep, so a group of
+  // two on a topic for three does not get to sit on the third place.
+  const held =
+    holding && group.declaredSize
+      ? Math.max(0, Math.min(group.declaredSize, topic.maxStudents) - occupied)
+      : 0;
+
   return {
     ...rest,
-    activeGroup: group
-      ? {
-          id: group.id,
-          status: group.status,
-          occupiedSeats: group._count.members,
-        }
-      : null,
+    activeGroup: {
+      id: group.id,
+      status: group.status,
+      occupiedSeats: occupied,
+      openForJoin: group.openForJoin,
+      /**
+       * True while seats are being kept for people the leader is bringing. The
+       * interface should say "taken" here rather than "one seat left", because a
+       * seat with somebody's name on it is not free.
+       */
+      holdActive: holding,
+    },
+    occupiedSeats: occupied,
+    isFull: full,
+    canRegister: false,
+    canJoin:
+      !full && group.openForJoin && topic.maxStudents - occupied - held > 0,
   };
 }
 
@@ -131,7 +170,10 @@ const DETAIL_INCLUDE = {
 
 @Injectable()
 export class TopicsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly phases: SemesterPhaseService,
+  ) {}
 
   async findAll(query: QueryTopicsDto, userId: number, role: Role) {
     const where: Prisma.TopicWhereInput = {
@@ -216,17 +258,18 @@ export class TopicsService {
       throw new NotFoundException('Topic not found');
     }
 
+    // The gate is the semester's phase, and only the phase. Comparing the dates
+    // here as well would quietly overrule an office that opened registration
+    // early or held it shut, which the phase exists to let them do.
+    const phase = await this.phases.resolve(topic.semesterId);
+
     return {
       ...withActiveGroup(topic),
-      // The registration window lives on the semester, so the client would
-      // otherwise have to fetch it separately just to know whether to enable
-      // the register button.
+      semesterPhase: phase,
+      // Saves the client a second request to the semester just to decide whether
+      // the register button should be live.
       isRegistrationOpen:
-        topic.status === TopicStatus.OPEN &&
-        isWithinWindow(
-          topic.semester.registrationStart,
-          topic.semester.registrationEnd,
-        ),
+        topic.status === TopicStatus.OPEN && phase === SemesterPhase.OPEN,
     };
   }
 
@@ -440,10 +483,4 @@ function canSee(status: TopicStatus, role: Role): boolean {
   if (role !== Role.STUDENT) return true;
 
   return (PUBLISHED_STATUSES as readonly TopicStatus[]).includes(status);
-}
-
-function isWithinWindow(start: Date, end: Date): boolean {
-  const now = Date.now();
-
-  return now >= start.getTime() && now <= end.getTime();
 }

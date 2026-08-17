@@ -6,7 +6,6 @@ import {
 } from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
 import { randomInt } from 'crypto';
-import { Prisma } from '../../generated/prisma/client';
 import { MailService } from '../mail/mail.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateUserDto } from './dto/create-user.dto';
@@ -15,6 +14,10 @@ import { UpdateUserDto } from './dto/update-user.dto';
 import { UpsertLecturerProfileDto } from './dto/upsert-lecturer-profile.dto';
 import { UpsertStudentProfileDto } from './dto/upsert-student-profile.dto';
 import { mapWithConcurrency } from '../common/concurrency.util';
+import {
+  isUniqueViolation,
+  uniqueConstraintFields,
+} from '../common/prisma-error.util';
 import { checkClassCode } from './class-code.util';
 import {
   formatImportRowError,
@@ -85,28 +88,18 @@ const USER_SELECT = {
 } as const;
 
 /**
- * P2002 reports that a unique constraint tripped, not which one. Reading
- * meta.target matters because the email pre-check and the insert are not
- * atomic — a concurrent request can take the address in between — and blaming
- * that on a duplicate student code sends the admin auditing the wrong column.
+ * P2002 reports that a unique constraint tripped, not which one. Knowing which
+ * matters because the email pre-check and the insert are not atomic — a
+ * concurrent request can take the address in between — and blaming that on a
+ * duplicate student code sends the admin auditing the wrong column.
  *
  * Returns null when the error is not a unique-constraint violation at all, and
- * an empty array when Prisma gave us no target to work with.
+ * an empty array when the driver gave us nothing to work with.
  */
 function conflictingUniqueFields(err: unknown): string[] | null {
-  if (
-    !(err instanceof Prisma.PrismaClientKnownRequestError) ||
-    err.code !== 'P2002'
-  ) {
-    return null;
-  }
+  if (!isUniqueViolation(err)) return null;
 
-  const target = err.meta?.target;
-  if (Array.isArray(target)) {
-    return (target as unknown[]).map((field) => String(field).toLowerCase());
-  }
-  if (typeof target === 'string') return [target.toLowerCase()];
-  return [];
+  return uniqueConstraintFields(err);
 }
 
 // Excludes visually ambiguous characters (0/O, 1/l/I)
