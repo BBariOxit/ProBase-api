@@ -139,6 +139,15 @@ model User {
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
 
+  // Brute-force protection, counted against the account rather than the caller's
+  // IP address. An attacker can rent a new address for every guess, but every
+  // guess at this account has to land here — and students on campus wifi all
+  // share one address, so counting by address throttles the cohort instead of
+  // the attacker. Covers both places this password can be guessed (sign-in and
+  // change-password); reset to zero whenever it is entered correctly.
+  failedPasswordCount Int       @default(0)
+  passwordRetryAfter  DateTime? // Set while a backoff delay is in force
+
   // Relations
   studentProfile  StudentProfile?
   lecturerProfile LecturerProfile?

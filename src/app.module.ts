@@ -17,15 +17,25 @@ import { UsersModule } from './users/users.module';
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
-    // One loose ceiling for the whole API. Credential endpoints tighten it per
-    // route with @Throttle — a second named bucket would not work, because
-    // every configured throttler applies to every route, so an `auth` bucket
-    // of 5/min would throttle the entire API to five requests a minute.
+    // One loose ceiling, applied to every route separately — the storage key is
+    // hashed from the controller and handler name alongside the caller, so this
+    // is 120 requests a minute per endpoint, not 120 across the API. Credential
+    // endpoints override it per route with @Throttle; a second named bucket
+    // would not work, because every configured throttler applies to every route.
     //
     // Counting is per IP and in-memory: it resets on restart and does not span
-    // instances. Right-sized for now; a shared store is only needed once the
-    // API runs as more than one process.
-    ThrottlerModule.forRoot([{ ttl: 60_000, limit: 120 }]),
+    // instances. That is why brute-force protection does not live here — it is
+    // counted per account, in the database, by AuthService. What is left for
+    // this is capping how hard one host can hammer one endpoint, which an IP
+    // count does well and needs no durability.
+    ThrottlerModule.forRoot({
+      throttlers: [{ ttl: 60_000, limit: 120 }],
+      // Nest's default is "ThrottlerException: Too Many Requests" — a framework
+      // class name, in English, on a Vietnamese screen, telling nobody what to
+      // do. The client used to paper over it with a canned string, which then
+      // also overwrote the messages that did say something useful.
+      errorMessage: 'Bạn gửi quá nhiều yêu cầu. Đợi một phút rồi thử lại.',
+    }),
     PrismaModule,
     AuthModule,
     MajorsModule,

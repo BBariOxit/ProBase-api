@@ -1,5 +1,7 @@
 import {
   BadRequestException,
+  HttpException,
+  HttpStatus,
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -16,6 +18,64 @@ import { ResetPasswordDto } from './dto/reset-password.dto';
 
 /** FR_STU_01: the reset link is valid for fifteen minutes and one use. */
 const RESET_TOKEN_TTL_MINUTES = 15;
+
+/**
+ * Failures that pass before any delay applies.
+ *
+ * Three leaves room for a mistype and a stale browser autofill without the
+ * person ever meeting a delay, which is the whole point: this has to be
+ * invisible to everyone it is not aimed at.
+ */
+const FREE_PASSWORD_ATTEMPTS = 3;
+
+/** The first delay, doubling with every further failure. */
+const PASSWORD_BACKOFF_START_MS = 1_000;
+
+/**
+ * Ceiling on the delay, and the reason a delay is used rather than a lockout.
+ *
+ * Thirty seconds already ends the attack — under three thousand guesses a day
+ * against one account, no matter how many IP addresses are behind them — while
+ * someone who genuinely forgot their password waits less time than it takes to
+ * go find it written down. A hard lockout would buy nothing on top of that and
+ * would hand anyone who knows an address the power to shut its owner out.
+ */
+const PASSWORD_BACKOFF_MAX_MS = 30_000;
+
+/**
+ * Stands in for the password of an account that cannot be signed in to.
+ *
+ * `login` has to take the same time whether or not the address exists, or the
+ * response latency answers the question the error message deliberately refuses
+ * to. A `findUnique` miss returns in about a millisecond; bcrypt at cost 10
+ * takes tens of them. That gap is enough to sort a list of guessed addresses
+ * into real accounts and junk — and here the guesses are cheap to make, because
+ * a student's address is their student code at the university domain.
+ *
+ * Comparing against a throwaway hash of the same cost makes both paths do the
+ * same work. The plaintext behind it is not a secret and does not need to be:
+ * matching it unlocks nothing, because that path ends in the same rejection.
+ */
+const ABSENT_ACCOUNT_PASSWORD_HASH =
+  '$2b$10$Lh36v./BP/ZgRspszc4NE.SipqI9aACi2TdYJTxd11Xri.fQc/4h2';
+
+/**
+ * How long this account still has to wait, or 0 if it may try now.
+ *
+ * A missing user is never waiting: there is no row to hold a delay, and
+ * inventing one would leak which addresses exist.
+ */
+function passwordRetryAfterMs(
+  user: { passwordRetryAfter: Date | null } | null,
+) {
+  if (!user?.passwordRetryAfter) return 0;
+  return Math.max(0, user.passwordRetryAfter.getTime() - Date.now());
+}
+
+/** Seconds, rounded up, for a message someone has to read and act on. */
+function retryAfterSeconds(ms: number) {
+  return Math.ceil(ms / 1000);
+}
 
 /**
  * Returned to every caller of forgotPassword, whether or not the address
@@ -49,21 +109,49 @@ export class AuthService {
       where: { email: dto.email },
     });
 
-    if (!user || !user.isActive)
+    const retryAfterMs = passwordRetryAfterMs(user);
+    if (retryAfterMs > 0) {
+      throw new HttpException(
+        `Sai mật khẩu nhiều lần. Thử lại sau ${retryAfterSeconds(retryAfterMs)} giây.`,
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+
+    // One comparison, on both paths.
+    //
+    // A deactivated account takes the sentinel too: it can never be signed in
+    // to, so there is nothing to compare against, and skipping the work here
+    // would time-leak the difference between an account that is disabled and an
+    // address that was never issued.
+    const account = user?.isActive ? user : null;
+    const passwordMatch = await bcrypt.compare(
+      dto.password,
+      account?.password ?? ABSENT_ACCOUNT_PASSWORD_HASH,
+    );
+
+    if (!account || !passwordMatch) {
+      // Only a real row can carry a counter. An address nobody holds is limited
+      // by the per-IP ceiling on the route and nothing else, which is correct —
+      // there is no account here to protect.
+      if (user) await this.recordFailedPassword(user);
       throw new UnauthorizedException('Invalid credentials');
+    }
 
-    const passwordMatch = await bcrypt.compare(dto.password, user.password);
-    if (!passwordMatch) throw new UnauthorizedException('Invalid credentials');
+    await this.clearFailedPasswords(account);
 
-    const tokens = await this.generateTokenPair(user.id, user.email, user.role);
+    const tokens = await this.generateTokenPair(
+      account.id,
+      account.email,
+      account.role,
+    );
 
     return {
       ...tokens,
       user: {
-        id: user.id,
-        email: user.email,
-        role: user.role,
-        mustChangePassword: user.mustChangePassword,
+        id: account.id,
+        email: account.email,
+        role: account.role,
+        mustChangePassword: account.mustChangePassword,
       },
     };
   }
@@ -146,6 +234,21 @@ export class AuthService {
     return user;
   }
 
+  /**
+   * Shares the account's backoff with sign-in, because it is the same secret
+   * being guessed.
+   *
+   * The caller already holds a valid access token, so this is the endpoint
+   * someone reaches for after stealing a session: guess the current password and
+   * the account is theirs for good. Holding a token is not a reason to hand over
+   * unlimited guesses. There is no enumeration to worry about here — the token
+   * already names the account — so the reply can say exactly what is wrong.
+   *
+   * One consequence worth knowing: failures here also delay signing in, since
+   * both count against the same password. That is the intended reading rather
+   * than a side effect, and it costs the honest user nothing, because someone
+   * fumbling their current password is already signed in.
+   */
   async changePassword(userId: number, dto: ChangePasswordDto) {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
@@ -153,12 +256,24 @@ export class AuthService {
 
     if (!user) throw new UnauthorizedException('User not found');
 
+    const retryAfterMs = passwordRetryAfterMs(user);
+    if (retryAfterMs > 0) {
+      throw new HttpException(
+        `Sai mật khẩu nhiều lần. Thử lại sau ${retryAfterSeconds(retryAfterMs)} giây.`,
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+
     const passwordMatch = await bcrypt.compare(
       dto.currentPassword,
       user.password,
     );
-    if (!passwordMatch)
+    if (!passwordMatch) {
+      await this.recordFailedPassword(user);
       throw new BadRequestException('Current password is incorrect');
+    }
+
+    await this.clearFailedPasswords(user);
 
     const hash = await bcrypt.hash(dto.newPassword, 10);
 
@@ -285,6 +400,61 @@ export class AuthService {
   }
 
   // ── Private helpers ──────────────────────────────────────
+
+  /**
+   * Extends this account's backoff after a wrong password.
+   *
+   * The count keeps rising past the point where the delay stops growing. That is
+   * deliberate: it is the only record that the account is under attack, and an
+   * admin reading `failedPasswordCount = 4000` learns something that a count
+   * pinned at the cap would hide.
+   */
+  private async recordFailedPassword(user: {
+    id: number;
+    failedPasswordCount: number;
+  }) {
+    const failures = user.failedPasswordCount + 1;
+    const overrun = failures - FREE_PASSWORD_ATTEMPTS;
+    // 2 ** overrun reaches Infinity long before it overflows anything that
+    // matters, and Math.min takes Infinity to the cap, so a very long attack
+    // needs no special case.
+    const delayMs =
+      overrun > 0
+        ? Math.min(
+            PASSWORD_BACKOFF_START_MS * 2 ** (overrun - 1),
+            PASSWORD_BACKOFF_MAX_MS,
+          )
+        : 0;
+
+    await this.prisma.user.update({
+      where: { id: user.id },
+      data: {
+        failedPasswordCount: failures,
+        passwordRetryAfter: delayMs > 0 ? new Date(Date.now() + delayMs) : null,
+      },
+    });
+  }
+
+  /**
+   * Clears the backoff once the password is entered correctly.
+   *
+   * Skipped when there is nothing to clear, so the overwhelmingly common case —
+   * someone typing their password correctly — stays a read and does not turn
+   * every sign-in into a write.
+   */
+  private async clearFailedPasswords(user: {
+    id: number;
+    failedPasswordCount: number;
+    passwordRetryAfter: Date | null;
+  }) {
+    if (user.failedPasswordCount === 0 && user.passwordRetryAfter === null)
+      return;
+
+    await this.prisma.user.update({
+      where: { id: user.id },
+      data: { failedPasswordCount: 0, passwordRetryAfter: null },
+    });
+  }
 
   /** Resolves a raw token to its unexpired row, or null. */
   private async findLiveResetToken(token: string) {
