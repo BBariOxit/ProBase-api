@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
+  HttpException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -221,18 +222,13 @@ export class RegistrationGroupsService {
    */
   async joinTopic(topicId: number, userId: number) {
     const student = await this.requireStudent(userId);
-    const topic = await this.requireRegistrableTopic(topicId);
-
-    await this.phases.requireOpen(topic.semesterId);
-    await this.requireEligible(topic, student.cohort);
-    await this.requireNoExistingGroup(student.id, topic.semesterId);
 
     const group = await this.prisma.registrationGroup.findFirst({
       where: {
-        topicId: topic.id,
+        topicId,
         status: { not: RegistrationGroupStatus.REJECTED },
       },
-      select: { id: true },
+      select: GROUP_SELECT,
     });
 
     // Nothing is auto-created here on purpose: taking an unclaimed topic and
@@ -244,6 +240,8 @@ export class RegistrationGroupsService {
       );
     }
 
+    await this.assertJoinable(group, student, { allowHeldSeats: false });
+
     return this.addMember(group.id, student.id, GroupJoinSource.SELF, {
       allowHeldSeats: false,
     });
@@ -252,25 +250,71 @@ export class RegistrationGroupsService {
   /** Join through a group's link, which reaches the seats being held. */
   async joinByCode(joinCode: string, userId: number) {
     const student = await this.requireStudent(userId);
+    const group = await this.requireGroupByCode(joinCode);
 
-    const group = await this.prisma.registrationGroup.findUnique({
-      where: { joinCode },
-      select: { id: true, semesterId: true, status: true, topicId: true },
-    });
-
-    if (!group || group.status === RegistrationGroupStatus.REJECTED) {
-      throw new NotFoundException('This invite link is no longer valid');
-    }
-
-    await this.phases.requireOpen(group.semesterId);
-
-    const topic = await this.requireRegistrableTopic(group.topicId);
-    await this.requireEligible(topic, student.cohort);
-    await this.requireNoExistingGroup(student.id, group.semesterId);
+    await this.assertJoinable(group, student, { allowHeldSeats: true });
 
     return this.addMember(group.id, student.id, GroupJoinSource.LINK, {
       allowHeldSeats: true,
     });
+  }
+
+  /**
+   * What a link leads to, before the person following it commits to it.
+   *
+   * A join link gets pasted into a group chat and forwarded, and joining spends
+   * a student's single registration for the whole semester — so tapping a link
+   * must not be the act that spends it. This is what lets the page show the topic,
+   * the supervisor and who is already in before offering the button.
+   *
+   * Whether the caller may actually join is answered by running the very checks
+   * the POST runs and reporting what they said, rather than by a second copy of
+   * the rules. A preview that can disagree with the action it previews is worse
+   * than no preview: it turns the button into a trap.
+   */
+  async previewByCode(joinCode: string, userId: number) {
+    const student = await this.requireStudent(userId);
+    const group = await this.requireGroupByCode(joinCode);
+    const seats = seatBreakdown(group);
+
+    const alreadyMember = group.members.some(
+      (member) => member.studentId === student.id,
+    );
+
+    let blockedReason: string | null = null;
+    if (!alreadyMember) {
+      try {
+        await this.assertJoinable(group, student, { allowHeldSeats: true });
+      } catch (err) {
+        if (!(err instanceof HttpException)) throw err;
+        blockedReason = err.message;
+      }
+    }
+
+    return {
+      group: {
+        id: group.id,
+        name: group.name,
+        occupiedSeats: seats.occupied,
+        capacity: seats.capacity,
+        isFull: seats.occupied >= seats.capacity,
+        // Names only. Whoever holds the link is a legitimate invitee, not a
+        // reason to hand over classmates' codes and addresses.
+        members: group.members.map((member) => ({
+          fullName: member.student.fullName,
+          isLeader: member.studentId === group.leaderId,
+        })),
+      },
+      topic: {
+        id: group.topic.id,
+        title: group.topic.title,
+        projectType: group.topic.projectType,
+        lecturer: group.topic.lecturer,
+      },
+      alreadyMember,
+      canJoin: !alreadyMember && blockedReason === null,
+      blockedReason,
+    };
   }
 
   // ── read ──────────────────────────────────────────────────
@@ -707,6 +751,61 @@ export class RegistrationGroupsService {
     if (existing) {
       throw new ConflictException(
         `You are already in a group this semester, on "${existing.group.topic.title}" — leave it before taking another topic`,
+      );
+    }
+  }
+
+  private async requireGroupByCode(joinCode: string) {
+    const group = await this.prisma.registrationGroup.findUnique({
+      where: { joinCode },
+      select: GROUP_SELECT,
+    });
+
+    // A disbanded group answers the same as an unknown code. The link is dead
+    // either way, and distinguishing them would tell a stranger holding a stale
+    // link that it was once real.
+    if (!group || group.status === RegistrationGroupStatus.REJECTED) {
+      throw new NotFoundException('This invite link is no longer valid');
+    }
+
+    return group;
+  }
+
+  /**
+   * Every rule standing between a student and a group, in one place.
+   *
+   * Shared by the join endpoints and by the preview so the two cannot drift.
+   * The seat checks here are advisory — `addMember` repeats them holding a row
+   * lock, which is the only place they are authoritative — but running them now
+   * turns "full" into a plain answer rather than something reconstructed after a
+   * transaction has already rolled back.
+   */
+  private async assertJoinable(
+    group: GroupRow,
+    student: { id: number; cohort: string | null },
+    options: { allowHeldSeats: boolean },
+  ) {
+    await this.phases.requireOpen(group.semesterId);
+
+    const topic = await this.requireRegistrableTopic(group.topicId);
+    await this.requireEligible(topic, student.cohort);
+    await this.requireNoExistingGroup(student.id, group.semesterId);
+
+    if (!group.openForJoin) {
+      throw new ConflictException(
+        'This group has closed itself to new members',
+      );
+    }
+
+    const seats = seatBreakdown(group);
+
+    if (seats.occupied >= seats.capacity) {
+      throw new ConflictException('This group is already full');
+    }
+
+    if (!options.allowHeldSeats && seats.freeToAnyone === 0) {
+      throw new ConflictException(
+        'The remaining seats are being held for members the leader has invited — ask them for the join link',
       );
     }
   }

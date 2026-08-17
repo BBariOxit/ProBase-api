@@ -32,6 +32,16 @@ export class RegistrationGroupsController {
   }
 
   /**
+   * What a link leads to. Read-only, so the page can show the topic and who is
+   * already in the group before the visitor spends their one registration.
+   */
+  @Roles('STUDENT')
+  @Get('join/:code')
+  previewByCode(@Param('code') code: string, @GetUser('id') userId: number) {
+    return this.groups.previewByCode(code, userId);
+  }
+
+  /**
    * Join by link. POST rather than GET because it changes something, and the
    * code stays in the path so the whole link is one thing to paste into a chat.
    */
