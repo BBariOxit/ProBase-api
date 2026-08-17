@@ -381,11 +381,31 @@ export class RegistrationGroupsService {
       }
     }
 
+    // Bounded by the people already here and by what the topic holds. Below the
+    // membership it would describe a group smaller than it is; above the capacity
+    // it would claim seats the topic does not have.
+    if (dto.declaredSize != null) {
+      if (dto.declaredSize < group.members.length) {
+        throw new BadRequestException(
+          `The group already has ${group.members.length} member(s), so it cannot declare ${dto.declaredSize}`,
+        );
+      }
+
+      if (dto.declaredSize > group.topic.maxStudents) {
+        throw new BadRequestException(
+          `This topic holds ${group.topic.maxStudents} student(s), so ${dto.declaredSize} cannot be declared`,
+        );
+      }
+    }
+
     await this.prisma.registrationGroup.update({
       where: { id },
       data: {
         ...(dto.name !== undefined && { name: dto.name }),
         ...(dto.openForJoin !== undefined && { openForJoin: dto.openForJoin }),
+        ...(dto.declaredSize !== undefined && {
+          declaredSize: dto.declaredSize,
+        }),
         ...(dto.releaseHold && { holdUntil: null }),
         ...(dto.leaderId !== undefined && { leaderId: dto.leaderId }),
       },

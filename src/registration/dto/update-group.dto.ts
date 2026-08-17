@@ -4,20 +4,29 @@ import { z } from 'zod';
 /**
  * The leader's controls over their own group.
  *
- * `declaredSize` and `holdUntil` are not editable. The hold exists so a leader
- * can gather the friends they already agreed with, and letting it be pushed
- * outwards would turn a 24-hour courtesy into an indefinite lock on a topic —
- * which is the one thing the deadline is there to prevent. Releasing early is
- * always allowed, so the only move on offer is the one that frees a seat.
+ * `holdUntil` is not among them. It is fixed when the group is created and can
+ * only be brought forward, never pushed out: letting a leader extend it would
+ * turn a 24-hour courtesy into an indefinite lock on a topic, which is the one
+ * thing the deadline exists to prevent.
+ *
+ * `declaredSize` is editable inside that fixed window, which is a different
+ * thing. It says how many of the topic's seats the group is claiming, and moving
+ * it does not move the deadline — so a leader who first said three and then
+ * agrees to go with two frees the third seat immediately, and one whose third
+ * friend turns up can claim it back for whatever is left of the window they were
+ * already granted. Once the window lapses the number stops mattering entirely.
  */
 export const UpdateGroupSchema = z
   .object({
     name: z.string().trim().min(1).max(120).nullable().optional(),
     openForJoin: z.boolean().optional(),
     /**
-     * Give the held seats up now. `true` only — there is no way back, because
-     * re-holding is extending the hold under another name.
+     * How many of the topic's seats this group is claiming. Bounded by the
+     * members already in it and by the topic's capacity, both checked in the
+     * service where those numbers are known. Null gives up the claim entirely.
      */
+    declaredSize: z.coerce.number().int().min(1).max(10).nullable().optional(),
+    /** Give the held seats up now, whatever the declared size says. */
     releaseHold: z.literal(true).optional(),
     /** Hand the group over. Must be a student profile already in the group. */
     leaderId: z.coerce.number().int().positive().optional(),
