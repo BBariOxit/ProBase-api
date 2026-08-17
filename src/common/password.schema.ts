@@ -38,11 +38,13 @@ const COMMON_PASSWORDS = new Set([
 
 export const passwordSchema = z
   .string()
-  .min(MIN_LENGTH, `Password must be at least ${MIN_LENGTH} characters`)
-  .max(128, 'Password must be at most 128 characters')
+  .min(MIN_LENGTH, `Mật khẩu phải có ít nhất ${MIN_LENGTH} ký tự`)
+  .max(128, 'Mật khẩu không được dài hơn 128 ký tự')
   .refine((value) => !COMMON_PASSWORDS.has(value.toLowerCase()), {
-    message: 'Password is too common — please choose a different one',
+    // Says what is wrong with it, because "mật khẩu không hợp lệ" would send
+    // someone hunting for a missing capital letter that was never the problem.
+    message: 'Mật khẩu này quá phổ biến, hãy chọn mật khẩu khác',
   })
   .refine((value) => !/^(.)\1+$/.test(value), {
-    message: 'Password cannot be a single repeated character',
+    message: 'Mật khẩu không thể chỉ gồm một ký tự lặp lại',
   });

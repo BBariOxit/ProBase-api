@@ -1,7 +1,7 @@
 import { NestFactory } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
-import { ZodValidationPipe } from 'nestjs-zod';
 import { AppModule } from './app.module';
+import { ZodValidationPipe } from './common/zod-validation.pipe';
 
 /**
  * How many reverse proxies sit in front of this process.

@@ -42,6 +42,13 @@ const compare = bcrypt.compare as unknown as jest.Mock<
 const PASSWORD = 'Student@123';
 const PASSWORD_HASH = bcrypt.hashSync(PASSWORD, 10);
 
+/**
+ * The one refusal every failed sign-in gets, named here because several tests
+ * turn on it being the *same* refusal — an unknown address, a wrong password and
+ * a deactivated account must not be distinguishable by what they say.
+ */
+const WRONG_CREDENTIALS = 'Email hoặc mật khẩu không đúng';
+
 interface UserRow {
   id: number;
   email: string;
@@ -139,7 +146,7 @@ describe('AuthService password backoff', () => {
 
       await expect(
         service.login({ email: '2212345@dlu.edu.vn', password: 'wrong' }),
-      ).rejects.toThrow('Invalid credentials');
+      ).rejects.toThrow(WRONG_CREDENTIALS);
 
       // Writing a literal 4 here is what lets concurrent guesses collapse into
       // one: they would all have read 3.
@@ -168,7 +175,7 @@ describe('AuthService password backoff', () => {
 
         await expect(
           service.login({ email: '2212345@dlu.edu.vn', password: 'wrong' }),
-        ).rejects.toThrow('Invalid credentials');
+        ).rejects.toThrow(WRONG_CREDENTIALS);
 
         if (expectedDelayMs === null) {
           // No delay owed means no second write at all.
@@ -271,7 +278,7 @@ describe('AuthService password backoff', () => {
 
       await expect(
         service.login({ email: 'nobody@dlu.edu.vn', password: PASSWORD }),
-      ).rejects.toThrow('Invalid credentials');
+      ).rejects.toThrow(WRONG_CREDENTIALS);
 
       // The claim under test is that the unknown-address path does the same
       // bcrypt work as the known one; skipping it is what makes the response
@@ -284,7 +291,7 @@ describe('AuthService password backoff', () => {
 
       await expect(
         service.login({ email: 'nobody@dlu.edu.vn', password: PASSWORD }),
-      ).rejects.toThrow('Invalid credentials');
+      ).rejects.toThrow(WRONG_CREDENTIALS);
 
       expect(update).not.toHaveBeenCalled();
     });
@@ -296,7 +303,7 @@ describe('AuthService password backoff', () => {
 
       await expect(
         service.login({ email: '2212345@dlu.edu.vn', password: PASSWORD }),
-      ).rejects.toThrow('Invalid credentials');
+      ).rejects.toThrow(WRONG_CREDENTIALS);
     });
 
     it('does not compare against its own stored hash', async () => {
@@ -304,7 +311,7 @@ describe('AuthService password backoff', () => {
 
       await expect(
         service.login({ email: '2212345@dlu.edu.vn', password: PASSWORD }),
-      ).rejects.toThrow('Invalid credentials');
+      ).rejects.toThrow(WRONG_CREDENTIALS);
 
       // Comparing against the real hash would answer correctly and take the
       // success path's time; the sentinel keeps both wrong and constant.

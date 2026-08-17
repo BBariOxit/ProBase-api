@@ -151,7 +151,10 @@ export class AuthService {
       // by the per-IP ceiling on the route and nothing else, which is correct —
       // there is no account here to protect.
       if (user) await this.recordFailedPassword(user);
-      throw new UnauthorizedException('Invalid credentials');
+      // One wording for both, and it names neither field as the wrong one.
+      // "Email không tồn tại" would answer the question the sentinel hash above
+      // is there to keep unanswered.
+      throw new UnauthorizedException('Email hoặc mật khẩu không đúng');
     }
 
     await this.clearFailedPasswords(account);
@@ -185,7 +188,9 @@ export class AuthService {
         secret: this.refreshSecret,
       });
     } catch {
-      throw new UnauthorizedException('Invalid or expired refresh token');
+      throw new UnauthorizedException(
+        'Phiên đăng nhập không hợp lệ hoặc đã hết hạn',
+      );
     }
 
     // Check the token hash exists in DB
@@ -201,7 +206,9 @@ export class AuthService {
           where: { id: storedToken.id },
         });
       }
-      throw new UnauthorizedException('Invalid or expired refresh token');
+      throw new UnauthorizedException(
+        'Phiên đăng nhập không hợp lệ hoặc đã hết hạn',
+      );
     }
 
     // Delete the old token (rotation)
@@ -223,7 +230,7 @@ export class AuthService {
       where: { userId },
     });
 
-    return { message: 'Logged out successfully' };
+    return { message: 'Đã đăng xuất' };
   }
 
   async getMe(userId: number) {
@@ -246,7 +253,9 @@ export class AuthService {
     });
 
     if (!user || !user.isActive)
-      throw new UnauthorizedException('User not found or inactive');
+      throw new UnauthorizedException(
+        'Tài khoản không tồn tại hoặc đã bị vô hiệu hoá',
+      );
 
     return user;
   }
@@ -271,7 +280,7 @@ export class AuthService {
       where: { id: userId },
     });
 
-    if (!user) throw new UnauthorizedException('User not found');
+    if (!user) throw new UnauthorizedException('Tài khoản không tồn tại');
 
     const retryAfterMs = passwordRetryAfterMs(user);
     if (retryAfterMs > 0) {
@@ -287,7 +296,7 @@ export class AuthService {
     );
     if (!passwordMatch) {
       await this.recordFailedPassword(user);
-      throw new BadRequestException('Current password is incorrect');
+      throw new BadRequestException('Mật khẩu hiện tại không đúng');
     }
 
     await this.clearFailedPasswords(user);
@@ -307,7 +316,7 @@ export class AuthService {
     const tokens = await this.generateTokenPair(userId, user.email, user.role);
 
     return {
-      message: 'Password changed successfully',
+      message: 'Đổi mật khẩu thành công',
       ...tokens,
     };
   }
