@@ -74,7 +74,9 @@ describe('AuthService password backoff', () => {
 
   beforeEach(async () => {
     findUnique = jest.fn();
-    update = jest.fn().mockResolvedValue(undefined);
+    // Every `user.update` here stands in for one that returns the row, because
+    // recordFailedPassword reads the incremented count back off it.
+    update = jest.fn().mockResolvedValue({ failedPasswordCount: 1 });
     compare.mockClear();
 
     const module: TestingModule = await Test.createTestingModule({
@@ -108,67 +110,80 @@ describe('AuthService password backoff', () => {
     service = module.get(AuthService);
   });
 
-  /** What `recordFailedPassword` wrote, for the single update it should make. */
-  function writtenBackoff() {
-    expect(update).toHaveBeenCalledTimes(1);
+  /** The `data` payload of the nth `user.update` call, 0-indexed. */
+  function writtenData(nth: number) {
     const calls = update.mock.calls as [
       {
-        data: { failedPasswordCount: number; passwordRetryAfter: Date | null };
+        data: {
+          failedPasswordCount?: number | { increment: number };
+          passwordRetryAfter?: Date | null;
+        };
       },
     ][];
-    return calls[0][0].data;
+    return calls[nth][0].data;
+  }
+
+  /**
+   * Stands in for `RETURNING failedPasswordCount`, which is what the service
+   * derives the delay from — the count it read before the increment is
+   * deliberately not used.
+   */
+  function incrementYields(count: number) {
+    update.mockResolvedValue({ failedPasswordCount: count });
   }
 
   describe('a wrong password', () => {
+    it('advances the count with an atomic increment, not a computed value', async () => {
+      findUnique.mockResolvedValue(userRow({ failedPasswordCount: 3 }));
+      incrementYields(4);
+
+      await expect(
+        service.login({ email: '2212345@dlu.edu.vn', password: 'wrong' }),
+      ).rejects.toThrow('Invalid credentials');
+
+      // Writing a literal 4 here is what lets concurrent guesses collapse into
+      // one: they would all have read 3.
+      expect(writtenData(0).failedPasswordCount).toEqual({ increment: 1 });
+    });
+
     it.each([
-      [0, 1, null],
-      [1, 2, null],
-      [2, 3, null],
-      [3, 4, 1_000],
-      [4, 5, 2_000],
-      [5, 6, 4_000],
-      [6, 7, 8_000],
+      [1, null],
+      [2, null],
+      [3, null],
+      [4, 1_000],
+      [5, 2_000],
+      [6, 4_000],
+      [7, 8_000],
+      // 2 ** 3997 is Infinity, and Infinity must land on the cap rather than
+      // producing an Invalid Date that would never expire.
+      [4_001, 30_000],
     ])(
-      'failure %i takes the count to %i and the delay to %s ms',
-      async (before, after, expectedDelayMs) => {
-        findUnique.mockResolvedValue(userRow({ failedPasswordCount: before }));
+      'failure number %i owes a delay of %s ms',
+      async (failures, expectedDelayMs) => {
+        findUnique.mockResolvedValue(
+          userRow({ failedPasswordCount: failures - 1 }),
+        );
+        incrementYields(failures);
         const start = Date.now();
 
         await expect(
           service.login({ email: '2212345@dlu.edu.vn', password: 'wrong' }),
         ).rejects.toThrow('Invalid credentials');
 
-        const data = writtenBackoff();
-        expect(data.failedPasswordCount).toBe(after);
-
         if (expectedDelayMs === null) {
-          expect(data.passwordRetryAfter).toBeNull();
-        } else {
-          // Compared as a window, not an instant: the delay is measured from
-          // whenever the service happened to run.
-          const delay = data.passwordRetryAfter!.getTime() - start;
-          expect(delay).toBeGreaterThan(expectedDelayMs - 500);
-          expect(delay).toBeLessThanOrEqual(expectedDelayMs + 500);
+          // No delay owed means no second write at all.
+          expect(update).toHaveBeenCalledTimes(1);
+          return;
         }
+
+        expect(update).toHaveBeenCalledTimes(2);
+        // Compared as a window, not an instant: the delay is measured from
+        // whenever the service happened to run.
+        const delay = writtenData(1).passwordRetryAfter!.getTime() - start;
+        expect(delay).toBeGreaterThan(expectedDelayMs - 500);
+        expect(delay).toBeLessThanOrEqual(expectedDelayMs + 500);
       },
     );
-
-    it('stops growing the delay at the cap', async () => {
-      findUnique.mockResolvedValue(userRow({ failedPasswordCount: 4_000 }));
-      const start = Date.now();
-
-      await expect(
-        service.login({ email: '2212345@dlu.edu.vn', password: 'wrong' }),
-      ).rejects.toThrow('Invalid credentials');
-
-      const data = writtenBackoff();
-      // 2 ** 3997 is Infinity, and Infinity must land on the cap rather than
-      // producing an Invalid Date that would never expire.
-      const delay = data.passwordRetryAfter!.getTime() - start;
-      expect(delay).toBeGreaterThan(29_500);
-      expect(delay).toBeLessThanOrEqual(30_500);
-      expect(data.failedPasswordCount).toBe(4_001);
-    });
   });
 
   describe('while a delay is in force', () => {

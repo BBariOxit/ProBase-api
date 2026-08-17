@@ -78,6 +78,23 @@ function retryAfterSeconds(ms: number) {
 }
 
 /**
+ * The delay owed after `failures` consecutive wrong passwords, or 0.
+ *
+ * 2 ** overrun reaches Infinity long before it overflows anything that matters,
+ * and Math.min takes Infinity to the cap, so a very long attack needs no
+ * special case.
+ */
+function passwordBackoffMs(failures: number) {
+  const overrun = failures - FREE_PASSWORD_ATTEMPTS;
+  if (overrun <= 0) return 0;
+
+  return Math.min(
+    PASSWORD_BACKOFF_START_MS * 2 ** (overrun - 1),
+    PASSWORD_BACKOFF_MAX_MS,
+  );
+}
+
+/**
  * Returned to every caller of forgotPassword, whether or not the address
  * exists. Telling an unknown address apart from a known one would turn the
  * endpoint into a list of who holds an account here.
@@ -404,34 +421,35 @@ export class AuthService {
   /**
    * Extends this account's backoff after a wrong password.
    *
+   * The count is incremented by the database rather than computed here from the
+   * row we happen to have read. Reading 3 and writing 4 looks equivalent until
+   * guesses arrive in parallel: fifty concurrent attempts would all read the
+   * same 3, all write 4, and the delay would never reflect more than one of
+   * them. Letting Postgres do the arithmetic means every attempt advances the
+   * count exactly once, whatever order they land in.
+   *
    * The count keeps rising past the point where the delay stops growing. That is
    * deliberate: it is the only record that the account is under attack, and an
    * admin reading `failedPasswordCount = 4000` learns something that a count
    * pinned at the cap would hide.
    */
-  private async recordFailedPassword(user: {
-    id: number;
-    failedPasswordCount: number;
-  }) {
-    const failures = user.failedPasswordCount + 1;
-    const overrun = failures - FREE_PASSWORD_ATTEMPTS;
-    // 2 ** overrun reaches Infinity long before it overflows anything that
-    // matters, and Math.min takes Infinity to the cap, so a very long attack
-    // needs no special case.
-    const delayMs =
-      overrun > 0
-        ? Math.min(
-            PASSWORD_BACKOFF_START_MS * 2 ** (overrun - 1),
-            PASSWORD_BACKOFF_MAX_MS,
-          )
-        : 0;
+  private async recordFailedPassword(user: { id: number }) {
+    const { failedPasswordCount } = await this.prisma.user.update({
+      where: { id: user.id },
+      data: { failedPasswordCount: { increment: 1 } },
+      select: { failedPasswordCount: true },
+    });
 
+    const delayMs = passwordBackoffMs(failedPasswordCount);
+    if (delayMs === 0) return;
+
+    // A second statement, because the delay depends on the count the increment
+    // just produced. Concurrent failures each write their own instant and the
+    // last one wins, which is the right outcome: the delay grows with the count,
+    // so the straggler is writing the longest of them.
     await this.prisma.user.update({
       where: { id: user.id },
-      data: {
-        failedPasswordCount: failures,
-        passwordRetryAfter: delayMs > 0 ? new Date(Date.now() + delayMs) : null,
-      },
+      data: { passwordRetryAfter: new Date(Date.now() + delayMs) },
     });
   }
 
