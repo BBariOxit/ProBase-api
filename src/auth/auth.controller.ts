@@ -20,19 +20,28 @@ import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 
 /**
- * Five attempts a minute per IP, for endpoints where guessing is actually
- * feasible — a password is short enough to be worth trying repeatedly.
+ * A wide net, because the throttler counts by IP address and an IP address is
+ * not a person.
  *
- * A password policy raises the cost of one guess; this caps how many guesses
- * are on offer. Without it, requiring eight characters just means an attacker
- * needs a slightly longer list.
+ * This used to be five a minute, which read as "five guesses per attacker" and
+ * was in fact neither half of that. Students on campus wifi reach the API from
+ * one shared address, so the five were split across everyone on the network —
+ * the sixth person to sign in at nine in the morning was refused for something
+ * a stranger did. An attacker, meanwhile, rents an address per guess and gets
+ * five on each.
+ *
+ * Guessing is now held off where the count cannot be diluted or multiplied: on
+ * the account itself, by the backoff in AuthService.login. What is left for this
+ * ceiling is the job an IP count is genuinely good at — stopping one host from
+ * burning the CPU, since every attempt here costs a deliberately slow bcrypt
+ * comparison. Sixty a minute is far above what a person on a login form can
+ * produce and far below what a flood needs.
  *
  * Deliberately NOT applied to reset-password: its token is 32 random bytes, so
  * there is no guessing surface to defend and a tight limit would only punish
- * someone finishing a legitimate reset. The looser app-wide ceiling still
- * covers it.
+ * someone finishing a legitimate reset. The app-wide ceiling still covers it.
  */
-const GUESSABLE_SECRET_RATE_LIMIT = { default: { limit: 5, ttl: 60_000 } };
+const CREDENTIAL_IP_CEILING = { default: { limit: 60, ttl: 60_000 } };
 
 /**
  * Requesting a link is limited for a different reason: it sends mail. Left
@@ -46,7 +55,7 @@ export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
   @Public()
-  @Throttle(GUESSABLE_SECRET_RATE_LIMIT)
+  @Throttle(CREDENTIAL_IP_CEILING)
   @Post('login')
   @HttpCode(HttpStatus.OK)
   login(@Body() dto: LoginDto) {
@@ -110,9 +119,13 @@ export class AuthController {
   }
 
   // Guessing `currentPassword` is a credential attack like any other, even
-  // though the caller already holds a valid access token.
+  // though the caller already holds a valid access token — but the guessing is
+  // held off per account in the service, not by this ceiling. It matters here in
+  // particular: at the start of a semester every admin-created account is sent
+  // to this endpoint at once, so a tight per-IP count would refuse a whole
+  // cohort of first-time sign-ins.
   @AllowTempPassword()
-  @Throttle(GUESSABLE_SECRET_RATE_LIMIT)
+  @Throttle(CREDENTIAL_IP_CEILING)
   @Patch('change-password')
   changePassword(
     @GetUser('id') userId: number,

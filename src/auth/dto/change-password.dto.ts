@@ -4,11 +4,11 @@ import { passwordSchema } from '../../common/password.schema';
 
 export const ChangePasswordSchema = z
   .object({
-    currentPassword: z.string().min(1, 'Current password is required'),
+    currentPassword: z.string().min(1, 'Vui lòng nhập mật khẩu hiện tại'),
     newPassword: passwordSchema,
   })
   .refine((data) => data.currentPassword !== data.newPassword, {
-    message: 'New password must be different from current password',
+    message: 'Mật khẩu mới phải khác mật khẩu hiện tại',
     path: ['newPassword'],
   });
 

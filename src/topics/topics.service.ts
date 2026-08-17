@@ -9,9 +9,11 @@ import {
   Prisma,
   RegistrationGroupStatus,
   Role,
+  SemesterPhase,
   TopicStatus,
 } from '../../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { SemesterPhaseService } from '../semesters/semester-phase.service';
 import { CreateTopicDto } from './dto/create-topic.dto';
 import { QueryTopicsDto } from './dto/query-topics.dto';
 import { UpdateTopicDto } from './dto/update-topic.dto';
@@ -31,30 +33,26 @@ const PUBLISHED_STATUSES = [
 /**
  * The one group that currently holds a topic, if any.
  *
- * A plain count of registration_groups is the wrong question now. Since the
- * allocation model changed, at most one group can be live on a topic — so a
- * count can only ever be nought or one — and REJECTED rows are kept on purpose
- * for the record, which means the count reports groups that walked away as
- * though they were still there.
+ * A plain count of registration_groups is the wrong question. At most one group
+ * can be live on a topic — so a count can only ever be nought or one — and
+ * REJECTED rows are kept on purpose for the record, which means counting them
+ * reports groups that walked away as though they were still there.
  *
- * Seats are ACCEPTED members plus outstanding INVITED ones, because an
- * invitation holds its seat until it is answered or expires.
+ * Seats are simply the members: joining is one action now, so a row exists only
+ * once somebody is actually in. `openForJoin` and `holdUntil` come along because
+ * a seat being unoccupied is not the same as a seat being available to the person
+ * looking at it.
  */
 const ACTIVE_GROUP_SELECT = {
   where: { status: { not: RegistrationGroupStatus.REJECTED } },
   select: {
     id: true,
     status: true,
+    openForJoin: true,
+    declaredSize: true,
+    holdUntil: true,
     _count: {
-      select: {
-        members: {
-          where: {
-            status: {
-              in: [GroupMemberStatus.INVITED, GroupMemberStatus.ACCEPTED],
-            },
-          },
-        },
-      },
+      select: { members: { where: { status: GroupMemberStatus.ACCEPTED } } },
     },
   },
   take: 1,
@@ -74,31 +72,101 @@ const LIST_SELECT = {
 } satisfies Prisma.TopicSelect;
 
 type TopicWithGroups = {
+  maxStudents: number;
   registrationGroups: {
     id: number;
     status: RegistrationGroupStatus;
+    openForJoin: boolean;
+    declaredSize: number | null;
+    holdUntil: Date | null;
     _count: { members: number };
   }[];
 };
 
 /**
- * Flattens the at-most-one live group into a field the client can read
- * directly. An array of one is an implementation detail of how the constraint
- * is expressed, not something every caller should have to unwrap.
+ * Flattens the at-most-one live group into fields the client can read directly,
+ * including which of the two buttons to offer.
+ *
+ * An array of one is an implementation detail of how the constraint is
+ * expressed, not something every caller should have to unwrap. Nor should the
+ * browse screen have to reimplement the seat arithmetic: getting it wrong there
+ * means offering a seat that the API will then refuse.
  */
-function withActiveGroup<T extends TopicWithGroups>(topic: T) {
+function withActiveGroup<T extends TopicWithGroups>(
+  topic: T,
+  /**
+   * What this particular caller may do, when the caller is known.
+   *
+   * Both booleans mean "the API would accept this from you", not "a seat exists"
+   * — so everything the register endpoint checks has to be reflected here.
+   * Anything less puts a live button in front of a request certain to be refused,
+   * and the browse screen has no way to know better, since availability is
+   * exactly what it is asking this endpoint for.
+   */
+  viewer?: { gateOpen: boolean; eligible: boolean },
+) {
   const { registrationGroups, ...rest } = topic;
   const group = registrationGroups[0];
+  const allowed = viewer === undefined || (viewer.gateOpen && viewer.eligible);
+
+  /**
+   * Whether this caller's intake may take this kind of project, or null when the
+   * question does not apply to them.
+   *
+   * Sent separately from the two booleans because "you cannot have this" and
+   * "somebody else has this" are different facts, and a screen with only
+   * canRegister/canJoin to go on cannot tell them apart — it would end up calling
+   * an unclaimed topic taken.
+   */
+  const eligibleForMe = viewer?.eligible ?? null;
+
+  if (!group) {
+    return {
+      ...rest,
+      activeGroup: null,
+      occupiedSeats: 0,
+      isFull: false,
+      /** Nobody holds it: the first student to press register takes it. */
+      canRegister: allowed,
+      canJoin: false,
+      eligibleForMe,
+    };
+  }
+
+  const occupied = group._count.members;
+  const full = occupied >= topic.maxStudents;
+  const holding = group.holdUntil !== null && group.holdUntil > new Date();
+
+  // Seats above the declared size were never the leader's to keep, so a group of
+  // two on a topic for three does not get to sit on the third place.
+  const held =
+    holding && group.declaredSize
+      ? Math.max(0, Math.min(group.declaredSize, topic.maxStudents) - occupied)
+      : 0;
 
   return {
     ...rest,
-    activeGroup: group
-      ? {
-          id: group.id,
-          status: group.status,
-          occupiedSeats: group._count.members,
-        }
-      : null,
+    activeGroup: {
+      id: group.id,
+      status: group.status,
+      occupiedSeats: occupied,
+      openForJoin: group.openForJoin,
+      /**
+       * True while seats are being kept for people the leader is bringing. The
+       * interface should say "taken" here rather than "one seat left", because a
+       * seat with somebody's name on it is not free.
+       */
+      holdActive: holding,
+    },
+    occupiedSeats: occupied,
+    isFull: full,
+    canRegister: false,
+    canJoin:
+      allowed &&
+      !full &&
+      group.openForJoin &&
+      topic.maxStudents - occupied - held > 0,
+    eligibleForMe,
   };
 }
 
@@ -131,7 +199,10 @@ const DETAIL_INCLUDE = {
 
 @Injectable()
 export class TopicsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly phases: SemesterPhaseService,
+  ) {}
 
   async findAll(query: QueryTopicsDto, userId: number, role: Role) {
     const where: Prisma.TopicWhereInput = {
@@ -157,6 +228,10 @@ export class TopicsService {
       where.lecturerId = query.lecturerId;
     }
 
+    if (query.forMyCohort) {
+      where.projectTypeId = { in: await this.eligibleProjectTypeIds(userId) };
+    }
+
     const [items, total] = await this.prisma.$transaction([
       this.prisma.topic.findMany({
         where,
@@ -168,13 +243,94 @@ export class TopicsService {
       this.prisma.topic.count({ where }),
     ]);
 
+    const viewers = await this.availabilityFor(items, userId, role);
+
     return {
-      items: items.map(withActiveGroup),
+      items: items.map((topic) => withActiveGroup(topic, viewers(topic))),
       total,
       page: query.page,
       limit: query.limit,
       totalPages: Math.ceil(total / query.limit),
     };
+  }
+
+  /**
+   * The project types the caller's intake may take, across every semester.
+   *
+   * Fails closed: an account with no intake on file, or an office that has not
+   * declared the rules yet, gets an empty list rather than the whole catalogue.
+   * The filter exists to show a student what is actually theirs, and guessing
+   * generously here would defeat it.
+   */
+  private async eligibleProjectTypeIds(userId: number) {
+    const profile = await this.prisma.studentProfile.findUnique({
+      where: { userId },
+      select: { cohort: true },
+    });
+
+    if (!profile?.cohort) return [];
+
+    const rules = await this.prisma.semesterEligibility.findMany({
+      where: { cohort: profile.cohort },
+      select: { projectTypeId: true },
+      distinct: ['projectTypeId'],
+    });
+
+    return rules.map((rule) => rule.projectTypeId);
+  }
+
+  /**
+   * Builds the per-topic answer to "would the API accept a registration from
+   * this caller", in two queries rather than two per row.
+   *
+   * Staff get no answer at all — `undefined` leaves the flags describing the
+   * topic rather than a viewer, because a lecturer reading their own list is not
+   * a candidate for a seat and blanking the fields would just look broken.
+   */
+  private async availabilityFor(
+    items: { semester: { id: number }; projectType: { id: number } }[],
+    userId: number,
+    role: Role,
+  ) {
+    if (role !== Role.STUDENT || items.length === 0) return () => undefined;
+
+    // Resolved rather than read off the joined row, so a gate that closed a
+    // minute ago is closed here too: the phase advances on being asked, and a
+    // page of buttons is a bad place to be the last to find out.
+    const semesterIds = [...new Set(items.map((topic) => topic.semester.id))];
+    const phases = new Map(
+      await Promise.all(
+        semesterIds.map(
+          async (id) => [id, await this.phases.resolve(id)] as const,
+        ),
+      ),
+    );
+
+    const profile = await this.prisma.studentProfile.findUnique({
+      where: { userId },
+      select: { cohort: true },
+    });
+
+    // One query for every rule on the page, keyed the way it is asked.
+    const rules = profile?.cohort
+      ? await this.prisma.semesterEligibility.findMany({
+          where: { semesterId: { in: semesterIds }, cohort: profile.cohort },
+          select: { semesterId: true, projectTypeId: true },
+        })
+      : [];
+    const eligible = new Set(
+      rules.map((rule) => `${rule.semesterId}:${rule.projectTypeId}`),
+    );
+
+    return (topic: {
+      semester: { id: number };
+      projectType: { id: number };
+    }) => ({
+      gateOpen: phases.get(topic.semester.id) === SemesterPhase.OPEN,
+      // The register endpoint refuses a project type the caller's intake is not
+      // open for, so a button offering it here would be a button that lies.
+      eligible: eligible.has(`${topic.semester.id}:${topic.projectType.id}`),
+    });
   }
 
   /**
@@ -203,7 +359,7 @@ export class TopicsService {
     return rows.map((row) => row.lecturer);
   }
 
-  async findOne(id: number, role: Role) {
+  async findOne(id: number, userId: number, role: Role) {
     const topic = await this.prisma.topic.findUnique({
       where: { id },
       include: DETAIL_INCLUDE,
@@ -216,17 +372,20 @@ export class TopicsService {
       throw new NotFoundException('Topic not found');
     }
 
+    // The gate is the semester's phase, and only the phase. Comparing the dates
+    // here as well would quietly overrule an office that opened registration
+    // early or held it shut, which the phase exists to let them do.
+    const phase = await this.phases.resolve(topic.semesterId);
+    const viewer = await this.availabilityFor([topic], userId, role);
+
     return {
-      ...withActiveGroup(topic),
-      // The registration window lives on the semester, so the client would
-      // otherwise have to fetch it separately just to know whether to enable
-      // the register button.
+      ...withActiveGroup(topic, viewer(topic)),
+      semesterPhase: phase,
+      // Saves the client a second request to the semester just to decide whether
+      // the register button should be live. This one is about the topic and the
+      // calendar only — whether *this* caller may take it is canRegister/canJoin.
       isRegistrationOpen:
-        topic.status === TopicStatus.OPEN &&
-        isWithinWindow(
-          topic.semester.registrationStart,
-          topic.semester.registrationEnd,
-        ),
+        topic.status === TopicStatus.OPEN && phase === SemesterPhase.OPEN,
     };
   }
 
@@ -440,10 +599,4 @@ function canSee(status: TopicStatus, role: Role): boolean {
   if (role !== Role.STUDENT) return true;
 
   return (PUBLISHED_STATUSES as readonly TopicStatus[]).includes(status);
-}
-
-function isWithinWindow(start: Date, end: Date): boolean {
-  const now = Date.now();
-
-  return now >= start.getTime() && now <= end.getTime();
 }

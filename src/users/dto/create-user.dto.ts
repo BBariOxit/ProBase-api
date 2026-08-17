@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { Role } from '../../../generated/prisma/client';
 import { emailSchema } from '../../common/email.schema';
+import { checkClassCode } from '../class-code.util';
 import {
   cohortFromStudentCode,
   studentCodeMatchesEmail,
@@ -33,10 +34,10 @@ const StudentCreateSchema = z
         .string()
         .regex(
           /^\d{7}$/,
-          'Student code must be 7 digits: 2 for the intake year, 5 for the sequence',
+          'Mã sinh viên phải gồm 7 chữ số: 2 số khoá và 5 số thứ tự',
         ),
     ),
-    fullName: requiredTrimmed(255, 'Full name is required'),
+    fullName: requiredTrimmed(255, 'Vui lòng nhập họ tên'),
     majorId: z.number().int().positive().optional(),
     class: trimmed(100).optional(),
     phone: trimmed(20).optional(),
@@ -44,8 +45,21 @@ const StudentCreateSchema = z
   })
   .refine((input) => studentCodeMatchesEmail(input.studentCode, input.email), {
     path: ['email'],
-    message: 'Email must start with the student code (e.g. 2212345@dlu.edu.vn)',
+    message: 'Email phải bắt đầu bằng mã sinh viên (ví dụ 2212345@dlu.edu.vn)',
   })
+  // A class code carries the intake too (`CTK46PM`), so it is a third claim
+  // about the same fact and gets checked against the code like the email does.
+  // An unrecognised shape is accepted — the faculty runs classes this pattern
+  // does not cover — but a contradiction means one of the two is a typo.
+  .refine(
+    (input) =>
+      checkClassCode(input.class, input.studentCode).status !== 'contradiction',
+    {
+      path: ['class'],
+      message:
+        'Mã lớp và mã sinh viên không khớp năm khoá — sửa lại cái nào sai',
+    },
+  )
   .transform((input) => ({
     ...input,
     // Non-null by construction — the regex above has already checked the shape.
@@ -55,8 +69,8 @@ const StudentCreateSchema = z
 const LecturerCreateSchema = z.object({
   role: z.literal(Role.LECTURER),
   email: emailSchema,
-  lecturerCode: requiredTrimmed(50, 'Lecturer code is required'),
-  fullName: requiredTrimmed(255, 'Full name is required'),
+  lecturerCode: requiredTrimmed(50, 'Vui lòng nhập mã giảng viên'),
+  fullName: requiredTrimmed(255, 'Vui lòng nhập họ tên'),
   academicTitle: trimmed(100).optional(),
   researchInterests: trimmed(1000).optional(),
   phone: trimmed(20).optional(),

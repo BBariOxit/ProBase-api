@@ -106,6 +106,10 @@ async function main() {
     month >= 7 ? new Date().getFullYear() : new Date().getFullYear() - 1;
   const semesterCode = `HK1-${academicYear}-${academicYear + 1}`;
 
+  // Phase is set explicitly, not left to its PREP default: the registration
+  // window below is deliberately open right now, and a semester sitting in PREP
+  // would refuse every registration while claiming to be open. The two have to
+  // agree, and only one of them can be the default.
   const semester = await prisma.semester.upsert({
     where: { code: semesterCode },
     create: {
@@ -117,10 +121,13 @@ async function main() {
       registrationEnd: daysFromNow(21),
       gradeSubmissionDeadline: daysFromNow(110),
       isActive: true,
+      phase: 'OPEN',
     },
+    // Reseeding a semester that has already moved on would otherwise drag it
+    // back to OPEN and unlock allocation work someone had finished.
     update: { isActive: true },
   });
-  console.log(`  semester: ${semesterCode} (registration open)`);
+  console.log(`  semester: ${semesterCode} (phase ${semester.phase})`);
 
   // Which cohort does which kind of project this semester — the mapping the
   // faculty announces. Cơ sở goes to the third-years, Chuyên ngành to the

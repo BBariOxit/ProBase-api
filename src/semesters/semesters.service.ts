@@ -5,21 +5,38 @@ import {
 } from '@nestjs/common';
 import { Role } from '../../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { SemesterPhaseService } from './semester-phase.service';
 import { CreateSemesterDto } from './dto/create-semester.dto';
 import { SetEligibilityDto } from './dto/set-eligibility.dto';
 import { UpdateSemesterDto } from './dto/update-semester.dto';
 
 @Injectable()
 export class SemestersService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly phases: SemesterPhaseService,
+  ) {}
 
+  /**
+   * Phases are brought up to date before the rows go out, so a client cannot be
+   * told a semester is still OPEN by the one endpoint whose whole job is to
+   * report its state. The advance is a no-op for every semester already on the
+   * right phase, which is nearly all of them nearly all of the time.
+   */
   async findAll() {
-    return this.prisma.semester.findMany({
+    const semesters = await this.prisma.semester.findMany({
       orderBy: { startDate: 'desc' },
       include: {
         _count: { select: { topics: true, registrationGroups: true } },
       },
     });
+
+    return Promise.all(
+      semesters.map(async (semester) => ({
+        ...semester,
+        phase: await this.phases.resolve(semester.id),
+      })),
+    );
   }
 
   async findOne(id: number) {
@@ -39,7 +56,7 @@ export class SemestersService {
 
     if (!semester) throw new NotFoundException('Semester not found');
 
-    return semester;
+    return { ...semester, phase: await this.phases.resolve(id) };
   }
 
   async create(dto: CreateSemesterDto) {

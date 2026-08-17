@@ -42,8 +42,10 @@ export class TempPasswordGuard implements CanActivate {
     // the right screen, and matching on a message is a promise nobody keeps.
     throw new ForbiddenException({
       statusCode: 403,
+      // `error` and `code` are for the client to branch on and stay in English;
+      // only `message` is read by a person.
       error: 'Forbidden',
-      message: 'Password change required',
+      message: 'Bạn cần đổi mật khẩu trước khi tiếp tục',
       code: 'PASSWORD_CHANGE_REQUIRED',
     });
   }

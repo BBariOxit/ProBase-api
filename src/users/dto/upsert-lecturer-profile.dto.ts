@@ -4,12 +4,12 @@ import { z } from 'zod';
 export const UpsertLecturerProfileSchema = z.object({
   lecturerCode: z
     .string()
-    .min(1, 'Lecturer code is required')
+    .min(1, 'Vui lòng nhập mã giảng viên')
     .max(50)
     .transform((val) => val.trim()),
   fullName: z
     .string()
-    .min(1, 'Full name is required')
+    .min(1, 'Vui lòng nhập họ tên')
     .max(255)
     .transform((val) => val.trim()),
   academicTitle: z.string().max(100).optional().nullable(), // e.g. "TS.", "PGS.TS.", "GS.TS."

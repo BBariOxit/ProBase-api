@@ -29,6 +29,10 @@ const StudentImportRowSchema = z
       .string()
       .min(1, 'majorCode is required for STUDENT rows')
       .max(50),
+    // Not free text: a class code re-encodes the intake and the major, both of
+    // which arrive on this row from elsewhere. UsersService cross-checks it —
+    // the intake against the student code here on the row, and the major against
+    // every other row sharing the same class code. See class-code.util.ts.
     class: z.string().max(100).optional(),
     phone: z.string().max(20).optional(),
     bio: z.string().max(2000).optional(),
