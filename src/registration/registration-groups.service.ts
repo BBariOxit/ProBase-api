@@ -9,6 +9,7 @@ import {
 import {
   GroupJoinSource,
   GroupMemberStatus,
+  NotificationType,
   Prisma,
   RegistrationGroupStatus,
   Role,
@@ -18,6 +19,7 @@ import {
   isUniqueViolation,
   uniqueConstraintName,
 } from '../common/prisma-error.util';
+import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { RoundPhaseService } from '../rounds/round-phase.service';
 import { QueryMyGroupDto } from './dto/query-my-group.dto';
@@ -85,7 +87,10 @@ const GROUP_SELECT = {
           class: true,
           cohort: true,
           major: { select: { id: true, name: true, code: true } },
-          user: { select: { email: true } },
+          // The account id is here to address notices to; `render` drops the
+          // whole `user` object and re-exposes only the address, so it never
+          // reaches a response.
+          user: { select: { id: true, email: true, avatarUrl: true } },
         },
       },
     },
@@ -135,6 +140,31 @@ function seatBreakdown(group: GroupRow) {
 }
 
 /**
+ * A topic that grew out of a student's proposal belongs to that student.
+ *
+ * Without this, accepting a proposal publishes the idea to everybody: a freshly
+ * approved topic is the newest unclaimed row on the browse screen, which is
+ * exactly what students are looking for, and the person who thought of it can
+ * lose it to somebody who read it thirty seconds ago.
+ *
+ * It needs no expiry of its own. Self-registration is only possible while the
+ * round is OPEN or EXTENDED, so the reservation lapses the moment the gate
+ * shuts — and from RECONCILING the faculty office may place anyone here, which
+ * is the point at which an unclaimed topic should be fair game.
+ */
+function requireProposerOrFree(
+  topic: { sourceProposal: { studentId: number } | null },
+  studentId: number,
+): void {
+  if (!topic.sourceProposal) return;
+  if (topic.sourceProposal.studentId === studentId) return;
+
+  throw new ConflictException(
+    'Đề tài này do một sinh viên khác đề xuất, nên chỉ bạn ấy đăng ký được.',
+  );
+}
+
+/**
  * A group filling up is what used to be a leader pressing Submit. Nobody presses
  * anything now, so the status follows the seat count — and follows it back down
  * when a member leaves, since a group that is no longer full is forming again.
@@ -153,6 +183,7 @@ export class RegistrationGroupsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly phases: RoundPhaseService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   // ── register ──────────────────────────────────────────────
@@ -170,6 +201,7 @@ export class RegistrationGroupsService {
 
     await this.phases.requireCanJoin(topic.roundId, student.id);
     await this.requireEligible(topic, student.cohort);
+    requireProposerOrFree(topic, student.id);
     await this.requireNoExistingGroup(student.id, topic.semesterId);
 
     if (dto.declaredSize && dto.declaredSize > topic.maxStudents) {
@@ -250,7 +282,7 @@ export class RegistrationGroupsService {
 
     await this.assertJoinable(group, student, { allowHeldSeats: false });
 
-    return this.addMember(group.id, student.id, GroupJoinSource.SELF, {
+    return this.addMember(group.id, student, GroupJoinSource.SELF, {
       allowHeldSeats: false,
     });
   }
@@ -262,7 +294,7 @@ export class RegistrationGroupsService {
 
     await this.assertJoinable(group, student, { allowHeldSeats: true });
 
-    return this.addMember(group.id, student.id, GroupJoinSource.LINK, {
+    return this.addMember(group.id, student, GroupJoinSource.LINK, {
       allowHeldSeats: true,
     });
   }
@@ -471,6 +503,19 @@ export class RegistrationGroupsService {
       });
     });
 
+    // The one thing here a student did not do to themselves, and the only way
+    // they would otherwise learn of it is by finding themselves back on the
+    // topic list with no explanation.
+    await this.notifications.notify([
+      {
+        userId: member.student.user.id,
+        type: NotificationType.GROUP_MEMBER_REMOVED,
+        title: 'Bạn đã bị đưa ra khỏi nhóm',
+        content: `Trưởng nhóm đã đưa bạn ra khỏi nhóm đề tài "${group.topic.title}". Nếu cổng đăng ký còn mở, bạn có thể chọn một đề tài khác.`,
+        targetId: group.topicId,
+      },
+    ]);
+
     return this.present(id, { studentId: student.id });
   }
 
@@ -513,6 +558,20 @@ export class RegistrationGroupsService {
         data: { status: RegistrationGroupStatus.REJECTED },
       }),
     ]);
+
+    // Everybody except whoever pressed it — they were there, and a notice about
+    // one's own action is noise that teaches people to stop reading them.
+    await this.notifications.notify(
+      group.members
+        .filter((member) => member.student.user.id !== userId)
+        .map((member) => ({
+          userId: member.student.user.id,
+          type: NotificationType.GROUP_DISBANDED,
+          title: 'Nhóm của bạn đã giải tán',
+          content: `Nhóm đề tài "${group.topic.title}" đã giải tán và đề tài trở lại danh sách. Nếu cổng đăng ký còn mở, bạn có thể chọn một đề tài khác.`,
+          targetId: group.topicId,
+        })),
+    );
 
     return { message: 'Group disbanded and the topic is available again' };
   }
@@ -582,12 +641,14 @@ export class RegistrationGroupsService {
    */
   private async addMember(
     groupId: number,
-    studentId: number,
+    student: { id: number; fullName: string },
     joinSource: GroupJoinSource,
     options: { allowHeldSeats: boolean },
   ) {
-    try {
-      await this.prisma.$transaction(async (tx) => {
+    const studentId = student.id;
+
+    const audience = await this.prisma
+      .$transaction(async (tx) => {
         await tx.$queryRaw`SELECT 1 FROM "registration_groups" WHERE "id" = ${groupId} FOR UPDATE`;
 
         // Re-read inside the lock: the counts checked before it was taken are
@@ -635,10 +696,27 @@ export class RegistrationGroupsService {
         });
 
         await this.syncStatus(tx, groupId, seats.capacity);
+
+        // Gathered while the row is still locked, so the list is exactly who was
+        // in the group at the moment this student joined it.
+        return {
+          userIds: group.members.map((member) => member.student.user.id),
+          topicTitle: group.topic.title,
+        };
+      })
+      .catch((err: unknown) => {
+        throw this.translateRegistrationConflict(err);
       });
-    } catch (err) {
-      throw this.translateRegistrationConflict(err);
-    }
+
+    await this.notifications.notify(
+      audience.userIds.map((userId) => ({
+        userId,
+        type: NotificationType.GROUP_MEMBER_JOINED,
+        title: 'Có người tham gia nhóm của bạn',
+        content: `${student.fullName} vừa vào nhóm đề tài "${audience.topicTitle}".`,
+        targetId: groupId,
+      })),
+    );
 
     return this.present(groupId, { studentId });
   }
@@ -694,7 +772,10 @@ export class RegistrationGroupsService {
           joinSource: member.joinSource,
           joinedAt: member.joinedAt,
           isLeader: member.studentId === group.leaderId,
-          student: { ...student, email: user.email },
+          // The avatar is lifted onto the student the same way the address is:
+          // it is stored against the account, but to this screen it is simply
+          // what this person looks like.
+          student: { ...student, email: user.email, avatarUrl: user.avatarUrl },
         };
       }),
       occupiedSeats: seats.occupied,
@@ -846,7 +927,7 @@ export class RegistrationGroupsService {
   private async requireStudent(userId: number) {
     const profile = await this.prisma.studentProfile.findUnique({
       where: { userId },
-      select: { id: true, cohort: true },
+      select: { id: true, cohort: true, fullName: true },
     });
 
     if (!profile) {
@@ -868,6 +949,8 @@ export class RegistrationGroupsService {
         maxStudents: true,
         status: true,
         round: { select: { projectType: { select: { name: true } } } },
+        // Who, if anyone, this topic was written for. See requireProposerOrFree.
+        sourceProposal: { select: { studentId: true } },
       },
     });
 

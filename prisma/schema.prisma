@@ -124,12 +124,39 @@ enum CouncilMemberRole {
 
 // One value per notification case in FR_SYS_01. Without this the client has
 // only free text and cannot route a click to the record the notice is about.
+/// What a notice is about, so a client can filter and route on it.
+///
+/// The three group values this used to carry — GROUP_INVITATION,
+/// GROUP_APPROVED, GROUP_REJECTED — described the model that was removed:
+/// joining by invitation, and a lecturer approving each group. Nothing can
+/// raise them any more, and leaving them would leave the enum documenting a
+/// system that no longer exists.
 enum NotificationType {
+  /// A student sent this lecturer a topic proposal and is waiting on an answer.
+  /// The only notice in this list addressed to staff, and the reason it exists:
+  /// an inbox nobody is told about is an inbox nobody opens, and the person kept
+  /// waiting by that is a student who cannot register in the meantime.
+  PROPOSAL_SUBMITTED
+
   PROPOSAL_ACCEPTED
   PROPOSAL_REJECTED
-  GROUP_INVITATION
-  GROUP_APPROVED
-  GROUP_REJECTED
+
+  /// Somebody took one of the free seats in the reader's group.
+  GROUP_MEMBER_JOINED
+
+  /// The leader removed the reader from the group. The one event here that a
+  /// student never causes and would otherwise discover by finding themselves
+  /// back on the topic list.
+  GROUP_MEMBER_REMOVED
+
+  /// The reader's group was dissolved and its topic went back on the market.
+  GROUP_DISBANDED
+
+  /// A closed round reopened, and the reader is one of the students it reopened
+  /// for. Worth as much as the extension itself: an extension nobody is told
+  /// about reaches only the students who happened to look.
+  ROUND_EXTENDED
+
   SUBMISSION_FEEDBACK
   GRADE_PUBLISHED
   DEADLINE_REMINDER
@@ -157,6 +184,15 @@ model User {
   // change-password); reset to zero whenever it is entered correctly.
   failedPasswordCount Int       @default(0)
   passwordRetryAfter  DateTime? // Set while a backoff delay is in force
+
+  // The avatar lives here rather than on the two profile tables because an
+  // admin has neither of them, and a picture of yourself is not a fact about
+  // being a student. Two columns rather than one: the URL is what every screen
+  // renders, and the public id is the handle Cloudinary needs to destroy the
+  // old image when it is replaced — without it every re-upload would leak a
+  // file that nothing points at any more.
+  avatarUrl      String?
+  avatarPublicId String?
 
   // Relations
   studentProfile      StudentProfile?

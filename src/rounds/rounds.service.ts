@@ -6,11 +6,13 @@ import {
 } from '@nestjs/common';
 import {
   GroupMemberStatus,
+  NotificationType,
   Prisma,
   RegistrationGroupStatus,
   Role,
   RoundPhase,
 } from '../../generated/prisma/client';
+import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { ExtendRoundDto } from './dto/extend-round.dto';
 import { QueryRoundsDto } from './dto/query-rounds.dto';
@@ -58,6 +60,7 @@ export class RoundsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly phases: RoundPhaseService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   // ── read ──────────────────────────────────────────────────
@@ -397,10 +400,52 @@ export class RoundsService {
       });
     });
 
-    return this.findOne(id);
+    const extended = await this.findOne(id);
+
+    // Told after the fact, never inside the transaction: a database hiccup on a
+    // notice must not undo an extension the office has already been told
+    // succeeded.
+    await this.announceExtension(extended);
+
+    return extended;
   }
 
   // ── internals ─────────────────────────────────────────────
+
+  /**
+   * Tells the students an extension was granted for.
+   *
+   * This is not decoration on the feature — it is most of it. An extension that
+   * nobody hears about reaches only the students who happen to open the app
+   * again, and those are the ones who least needed a second chance. Everybody
+   * else finds out when they are told which topic the faculty put them on.
+   *
+   * Only students with no group are written to: the extension changes nothing
+   * for anyone else, and a notice that turns out to mean nothing teaches people
+   * to ignore the next one.
+   */
+  private async announceExtension(round: {
+    id: number;
+    semesterId: number;
+    registrationEnd: Date;
+    cohorts: string[];
+    projectType: { name: string };
+  }) {
+    const userIds = await this.notifications.studentsWithoutGroupIn({
+      semesterId: round.semesterId,
+      cohorts: round.cohorts,
+    });
+
+    await this.notifications.notify(
+      userIds.map((userId) => ({
+        userId,
+        type: NotificationType.ROUND_EXTENDED,
+        title: 'Khoa đã gia hạn đăng ký đề tài',
+        content: `Bạn chưa có nhóm. ${round.projectType.name} được mở lại tới hết ngày ${formatDate(round.registrationEnd)} — chọn đề tài trước hạn đó, nếu không khoa sẽ xếp bạn vào một đề tài còn chỗ.`,
+        targetId: round.id,
+      })),
+    );
+  }
 
   private assertScheduleEditable(phase: RoundPhase, movesWindow: boolean) {
     if (!movesWindow) return;
@@ -521,6 +566,23 @@ export class RoundsService {
 
     throw new NotFoundException(`Project type ${missing.join(', ')} not found`);
   }
+}
+
+/**
+ * A deadline as a student reads it.
+ *
+ * UTC on purpose. These columns are naive timestamps that Prisma writes as UTC,
+ * so formatting in the server's local zone would shift the date by the offset —
+ * and a deadline printed one day early or late is the one number in a notice
+ * that has to be right.
+ */
+function formatDate(value: Date): string {
+  return new Intl.DateTimeFormat('vi-VN', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    timeZone: 'UTC',
+  }).format(value);
 }
 
 /** Whether a plan actually moves either end of the window. */

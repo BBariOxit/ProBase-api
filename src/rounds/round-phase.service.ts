@@ -76,6 +76,59 @@ export class RoundPhaseService {
   }
 
   /**
+   * Throws unless this student may still put a topic proposal to a lecturer.
+   *
+   * Wider at the front than `requireCanJoin` and identical at the back. PREP is
+   * the phase proposals are *for*: the gate is shut, the catalogue is being
+   * written, and a lecturer has time to read one — refusing then would leave the
+   * feature usable only in the fortnight when everybody is busy registering.
+   *
+   * The far end is the same rule for the same reason. Once the office is placing
+   * students, a new proposal could only become a topic nobody is allowed to take.
+   */
+  async requireCanPropose(roundId: number, studentId: number): Promise<void> {
+    const round = await this.load(roundId);
+    const phase = await this.advance(round);
+
+    if (phase === RoundPhase.PREP || phase === RoundPhase.OPEN) return;
+
+    if (phase === RoundPhase.EXTENDED) {
+      if (!(await this.hasGroup(studentId, round.semesterId))) return;
+
+      throw new ConflictException(
+        'Registration reopened only for students who ended up without a group — you already have a topic',
+      );
+    }
+
+    throw new ConflictException(REFUSAL_BY_PHASE[phase]);
+  }
+
+  /**
+   * Throws unless a lecturer may still turn a proposal into a topic.
+   *
+   * Accepting creates a topic, and a topic created after the gate has closed is
+   * one no student can register for — so this refuses rather than handing the
+   * lecturer a way to produce something that looks like a yes and behaves like a
+   * no. Rejecting stays possible in every phase: a student waiting on an answer
+   * deserves one whatever the calendar says.
+   */
+  async requireCanAcceptProposal(roundId: number): Promise<void> {
+    const phase = await this.resolve(roundId);
+
+    if (
+      phase === RoundPhase.PREP ||
+      phase === RoundPhase.OPEN ||
+      phase === RoundPhase.EXTENDED
+    ) {
+      return;
+    }
+
+    throw new ConflictException(
+      'Đợt đăng ký đã đóng, nên đề tài duyệt bây giờ sẽ không ai đăng ký được nữa. Bạn vẫn có thể từ chối kèm nhận xét.',
+    );
+  }
+
+  /**
    * Throws unless a student may still take their own registration apart —
    * leave, disband, hand a member their place back.
    *

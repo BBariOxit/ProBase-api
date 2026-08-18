@@ -5,10 +5,15 @@ import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { AuthModule } from './auth/auth.module';
+import { CloudinaryModule } from './cloudinary/cloudinary.module';
+import { LecturersModule } from './lecturers/lecturers.module';
+import { MeModule } from './me/me.module';
 import { MailModule } from './mail/mail.module';
 import { MajorsModule } from './majors/majors.module';
+import { NotificationsModule } from './notifications/notifications.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { ProjectTypesModule } from './project-types/project-types.module';
+import { ProposalsModule } from './proposals/proposals.module';
 import { RegistrationModule } from './registration/registration.module';
 import { RoundsModule } from './rounds/rounds.module';
 import { SemestersModule } from './semesters/semesters.module';
@@ -39,10 +44,15 @@ import { UsersModule } from './users/users.module';
     }),
     PrismaModule,
     AuthModule,
+    CloudinaryModule,
+    LecturersModule,
     MajorsModule,
+    MeModule,
+    NotificationsModule,
     RoundsModule,
     SemestersModule,
     ProjectTypesModule,
+    ProposalsModule,
     TopicsModule,
     RegistrationModule,
     UsersModule,

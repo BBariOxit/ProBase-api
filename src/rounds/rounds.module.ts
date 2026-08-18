@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { NotificationsModule } from '../notifications/notifications.module';
 import { RoundPhaseService } from './round-phase.service';
 import { RoundsController } from './rounds.controller';
 import { RoundsService } from './rounds.service';
@@ -13,6 +14,7 @@ import { RoundsService } from './rounds.service';
  * faculty's plan, and it is the same plan.
  */
 @Module({
+  imports: [NotificationsModule],
   controllers: [RoundsController],
   providers: [RoundsService, RoundPhaseService],
   exports: [RoundsService, RoundPhaseService],

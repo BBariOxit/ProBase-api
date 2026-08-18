@@ -89,6 +89,10 @@ const LIST_SELECT = {
   round: ROUND_SELECT,
   lecturer: { select: { id: true, fullName: true, academicTitle: true } },
   registrationGroups: ACTIVE_GROUP_SELECT,
+  // Only the id of whoever proposed it. A topic born from a proposal is
+  // reserved for that student while the gate is open, and a screen that does
+  // not know it would draw a register button the API refuses.
+  sourceProposal: { select: { studentId: true } },
 } satisfies Prisma.TopicSelect;
 
 type TopicRound = {
@@ -102,6 +106,7 @@ type TopicRound = {
 type TopicWithGroups = {
   maxStudents: number;
   round: TopicRound;
+  sourceProposal: { studentId: number } | null;
   registrationGroups: {
     id: number;
     status: RegistrationGroupStatus;
@@ -137,13 +142,35 @@ function withActiveGroup<T extends TopicWithGroups>(
    * and the browse screen has no way to know better, since availability is
    * exactly what it is asking this endpoint for.
    */
-  viewer?: { gateOpen: boolean; eligible: boolean; hasGroup: boolean },
+  viewer?: {
+    gateOpen: boolean;
+    eligible: boolean;
+    hasGroup: boolean;
+    /** The topic came out of somebody else's proposal, so it is not on offer. */
+    reservedForOther: boolean;
+  },
 ) {
-  const { registrationGroups, round, ...rest } = topic;
+  const { registrationGroups, round, sourceProposal, ...rest } = topic;
   const group = registrationGroups[0];
   const allowed =
     viewer === undefined ||
-    (viewer.gateOpen && viewer.eligible && !viewer.hasGroup);
+    (viewer.gateOpen &&
+      viewer.eligible &&
+      !viewer.hasGroup &&
+      !viewer.reservedForOther);
+
+  /**
+   * Two facts rather than one, because they are read by different sentences.
+   *
+   * `fromProposal` is about the topic and is true for everybody — it is why the
+   * topic exists. `proposedByMe` is about the reader, and it is the difference
+   * between "Đề tài bạn đề xuất" and "do sinh viên khác đề xuất": with only the
+   * first flag a screen would have to describe someone else's reservation and
+   * the reader's own entitlement in the same words.
+   */
+  const fromProposal = sourceProposal !== null;
+  const proposedByMe =
+    viewer === undefined || !fromProposal ? null : !viewer.reservedForOther;
 
   /**
    * Flattened back to the shape callers already read. `round` comes along
@@ -173,6 +200,17 @@ function withActiveGroup<T extends TopicWithGroups>(
    */
   const eligibleForMe = viewer?.eligible ?? null;
 
+  /**
+   * Whether this reader already holds a place this semester, or null when the
+   * question does not apply to them.
+   *
+   * Sent because it is the other reason `canRegister` can be false while a topic
+   * sits there plainly unclaimed. Without it a screen can only grey the button
+   * out and say nothing, and the student reads that as the system being broken
+   * rather than as them already having what the button offers.
+   */
+  const alreadyInAGroup = viewer?.hasGroup ?? null;
+
   if (!group) {
     return {
       ...rest,
@@ -184,6 +222,9 @@ function withActiveGroup<T extends TopicWithGroups>(
       canRegister: allowed,
       canJoin: false,
       eligibleForMe,
+      alreadyInAGroup,
+      fromProposal,
+      proposedByMe,
     };
   }
 
@@ -222,6 +263,9 @@ function withActiveGroup<T extends TopicWithGroups>(
       group.openForJoin &&
       topic.maxStudents - occupied - held > 0,
     eligibleForMe,
+    alreadyInAGroup,
+    fromProposal,
+    proposedByMe,
   };
 }
 
@@ -242,6 +286,7 @@ const DETAIL_INCLUDE = {
     },
   },
   registrationGroups: ACTIVE_GROUP_SELECT,
+  sourceProposal: { select: { studentId: true } },
 } satisfies Prisma.TopicInclude;
 
 @Injectable()
@@ -336,7 +381,11 @@ export class TopicsService {
    * a candidate for a seat and blanking the fields would just look broken.
    */
   private async availabilityFor(
-    items: { semester: { id: number }; round: TopicRound }[],
+    items: {
+      semester: { id: number };
+      round: TopicRound;
+      sourceProposal: { studentId: number } | null;
+    }[],
     userId: number,
     role: Role,
     phases: Map<number, RoundPhase>,
@@ -344,6 +393,15 @@ export class TopicsService {
     if (role !== Role.STUDENT || items.length === 0) return () => undefined;
 
     const semesterIds = [...new Set(items.map((topic) => topic.semester.id))];
+
+    // Read once for the page rather than per row. Null only for an account with
+    // no student profile, which the role check above nearly rules out — and a
+    // null can match no proposal, so every reserved topic reads as somebody
+    // else's, which is the safe direction to be wrong in.
+    const me = await this.prisma.studentProfile.findUnique({
+      where: { userId },
+      select: { id: true },
+    });
 
     const eligible = new Set(
       await this.rounds.eligibleRoundIds(userId, semesterIds),
@@ -355,7 +413,11 @@ export class TopicsService {
     // is nearly the whole cohort once an extension is running.
     const taken = await this.semestersWhereIHaveAGroup(userId, semesterIds);
 
-    return (topic: { semester: { id: number }; round: TopicRound }) => {
+    return (topic: {
+      semester: { id: number };
+      round: TopicRound;
+      sourceProposal: { studentId: number } | null;
+    }) => {
       const phase = phases.get(topic.round.id) ?? topic.round.phase;
 
       return {
@@ -367,6 +429,12 @@ export class TopicsService {
         // for, so a button offering it here would be a button that lies.
         eligible: eligible.has(topic.round.id),
         hasGroup: taken.has(topic.semester.id),
+        // A topic written out of a proposal is that student's until the gate
+        // shuts; to everybody else it is not on offer, and the register
+        // endpoint refuses it for the same reason.
+        reservedForOther:
+          topic.sourceProposal !== null &&
+          topic.sourceProposal.studentId !== me?.id,
       };
     };
   }
