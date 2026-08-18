@@ -5,6 +5,9 @@ import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { AuthModule } from './auth/auth.module';
+import { CloudinaryModule } from './cloudinary/cloudinary.module';
+import { LecturersModule } from './lecturers/lecturers.module';
+import { MeModule } from './me/me.module';
 import { MailModule } from './mail/mail.module';
 import { MajorsModule } from './majors/majors.module';
 import { NotificationsModule } from './notifications/notifications.module';
@@ -40,7 +43,10 @@ import { UsersModule } from './users/users.module';
     }),
     PrismaModule,
     AuthModule,
+    CloudinaryModule,
+    LecturersModule,
     MajorsModule,
+    MeModule,
     NotificationsModule,
     RoundsModule,
     SemestersModule,

@@ -233,6 +233,19 @@ export class AuthService {
     return { message: 'Đã đăng xuất' };
   }
 
+  /**
+   * The session, and only the session.
+   *
+   * Every field here is named, and the two profiles are narrowed to the name and
+   * the code. Selecting the profile rows whole used to send `StudentProfile.note`
+   * — the faculty office's private remarks about that student, "bảo lưu HK1",
+   * "gọi không nghe máy" — back to the student it is written about, on an
+   * endpoint the app calls on every page load. Nothing on screen rendered it,
+   * which is exactly why it went unnoticed for so long.
+   *
+   * Anything richer belongs to `GET /me/profile`, which is asked for once by the
+   * one screen that shows it, rather than fetched on every navigation.
+   */
   async getMe(userId: number) {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
@@ -245,10 +258,11 @@ export class AuthService {
         // to rebuild its session from — without it here, refreshing the page
         // silently escapes the forced password-change screen.
         mustChangePassword: true,
+        avatarUrl: true,
         createdAt: true,
         updatedAt: true,
-        studentProfile: true,
-        lecturerProfile: true,
+        studentProfile: { select: { fullName: true, studentCode: true } },
+        lecturerProfile: { select: { fullName: true, lecturerCode: true } },
       },
     });
 

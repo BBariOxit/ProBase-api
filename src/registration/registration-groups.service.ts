@@ -90,7 +90,7 @@ const GROUP_SELECT = {
           // The account id is here to address notices to; `render` drops the
           // whole `user` object and re-exposes only the address, so it never
           // reaches a response.
-          user: { select: { id: true, email: true } },
+          user: { select: { id: true, email: true, avatarUrl: true } },
         },
       },
     },
@@ -746,7 +746,10 @@ export class RegistrationGroupsService {
           joinSource: member.joinSource,
           joinedAt: member.joinedAt,
           isLeader: member.studentId === group.leaderId,
-          student: { ...student, email: user.email },
+          // The avatar is lifted onto the student the same way the address is:
+          // it is stored against the account, but to this screen it is simply
+          // what this person looks like.
+          student: { ...student, email: user.email, avatarUrl: user.avatarUrl },
         };
       }),
       occupiedSeats: seats.occupied,

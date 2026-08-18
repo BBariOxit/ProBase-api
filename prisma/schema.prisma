@@ -179,6 +179,15 @@ model User {
   failedPasswordCount Int       @default(0)
   passwordRetryAfter  DateTime? // Set while a backoff delay is in force
 
+  // The avatar lives here rather than on the two profile tables because an
+  // admin has neither of them, and a picture of yourself is not a fact about
+  // being a student. Two columns rather than one: the URL is what every screen
+  // renders, and the public id is the handle Cloudinary needs to destroy the
+  // old image when it is replaced — without it every re-upload would leak a
+  // file that nothing points at any more.
+  avatarUrl      String?
+  avatarPublicId String?
+
   // Relations
   studentProfile      StudentProfile?
   lecturerProfile     LecturerProfile?
