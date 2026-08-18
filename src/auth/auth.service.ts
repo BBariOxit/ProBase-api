@@ -124,6 +124,14 @@ export class AuthService {
   async login(dto: LoginDto) {
     const user = await this.prisma.user.findUnique({
       where: { email: dto.email },
+      // The name comes back with the account because the client greets somebody
+      // the moment they arrive, and one round trip to /auth/me for a string it
+      // could have had here is a header that renders an address for a second and
+      // then swaps it for a name.
+      include: {
+        studentProfile: { select: { fullName: true } },
+        lecturerProfile: { select: { fullName: true } },
+      },
     });
 
     const retryAfterMs = passwordRetryAfterMs(user);
@@ -172,6 +180,11 @@ export class AuthService {
         email: account.email,
         role: account.role,
         mustChangePassword: account.mustChangePassword,
+        fullName:
+          account.studentProfile?.fullName ??
+          account.lecturerProfile?.fullName ??
+          null,
+        avatarUrl: account.avatarUrl,
       },
     };
   }
