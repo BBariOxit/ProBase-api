@@ -61,7 +61,7 @@ Hệ thống quản lý đồ án cho sinh viên Công nghệ Thông tin (bao g�
   >
   > _`phase` là **cột thật, không phải phép so sánh ngày**. Suy pha thuần từ `registration_end` thì pha `RECONCILING` không bao giờ kết thúc được: không có chỗ nào ghi nhận việc phân bổ đã xong. Ngày tháng là mốc kích hoạt, cột này là sự thật. `PREP → OPEN`, `OPEN → RECONCILING` và `EXTENDED → RECONCILING` được đẩy **lúc đọc** (lazy) nên không cần scheduler; `RECONCILING → FINALIZED` bắt buộc là một sự kiện có người bấm, và `finalised_by_id` + `finalised_at` là dấu vết của nó._
   >
-  > _`EXTENDED` là pha gia hạn: sinh viên **chưa có nhóm** đăng ký tiếp được, sinh viên **đã có nhóm** không rời được. Bất đối xứng có chủ ý — cấm rời nhóm là để kết quả phân bổ không vỡ sau lưng người vừa dựng nó, mà một em chưa có nhóm thì không nằm trong kết quả nào cả._
+  > _`EXTENDED` là pha gia hạn: sinh viên **chưa có nhóm** đăng ký tiếp được, sinh viên **đã có nhóm** không rời được. Bất đối xứng có chủ ý — cấm rời nhóm là để kết quả phân bổ không vỡ sau lưng người vừa dựng nó, mà một em chưa có nhóm thì không nằm trong kết quả nào cả. Giáo vụ **không xếp tay ở pha này**: cổng còn mở thì danh sách chưa có nhóm còn đổi dưới tay người đang xếp. Bàn phân bổ chỉ chạy ở `RECONCILING`._
 - **`round_eligibilities`**: Khóa nào được làm đợt nào. _(bảng mới, thay cho `semester_eligibilities`; hỗ trợ FR_ADM_03)_
   - `id` (PK), `round_id` (FK), `cohort` (String — năm nhập học, `"2022"`).
   - `UNIQUE(round_id, cohort)`, cộng index `(round_id)` cho câu hỏi nóng nhất: "kỳ này khóa này được làm những đợt nào".

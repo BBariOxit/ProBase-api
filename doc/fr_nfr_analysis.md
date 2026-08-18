@@ -25,7 +25,7 @@ Mọi quyền hành động ở các mục dưới đều được diễn giải
 | `PREP`        | xem đề tài, **chưa đăng ký được**                                                              | ra đề, sửa đề, công bố                              | khai eligibility, mở cổng                   | giáo vụ mở, hoặc tới `registration_start` |
 | `OPEN`        | tự đăng ký, rủ bạn, rời nhóm                                                                   | xem nhóm trên đề tài của mình                       | theo dõi tình hình lấp chỗ                  | **tự động** khi quá `registration_end`    |
 | `RECONCILING` | **chỉ đọc** — không đăng ký, không rời nhóm                                                    | được thông báo khi có SV bị xếp vào đề tài của mình | **xếp SV chưa có nhóm**, gia hạn, hoặc chốt | giáo vụ bấm **Gia hạn** hoặc **Chốt đợt** |
-| `EXTENDED`    | **chưa có nhóm**: đăng ký / tham gia được. **đã có nhóm**: chỉ đọc — không rời, không giải tán | như `RECONCILING`                                   | xếp tay song song; chưa chốt được           | **tự động** khi quá hạn gia hạn           |
+| `EXTENDED`    | **chưa có nhóm**: đăng ký / tham gia được. **đã có nhóm**: chỉ đọc — không rời, không giải tán | như `RECONCILING`                                   | **không xếp tay, không chốt** — chờ hết hạn | **tự động** khi quá hạn gia hạn           |
 | `FINALIZED`   | xem nhóm, đề tài, deadline                                                                     | hướng dẫn, chấm điểm                                | mở khoá lại nếu cần (có ghi log)            | —                                         |
 
 Tập chuyển pha đầy đủ — mỗi pha đúng một đường vào, không có đường tắt:
@@ -48,6 +48,8 @@ Pha `RECONCILING` khoá sinh viên vì **cho rời nhóm** thì kết quả phâ
 Đây là pha duy nhất mà hai sinh viên trong cùng một đợt có quyền khác nhau tuỳ tình trạng nhóm, nên nó phải là **một pha** chứ không phải một cờ gắn thêm vào `RECONCILING`. Nếu là cờ thì mọi chỗ kiểm quyền phải nhớ kiểm hai thứ thay vì một, và câu từ chối hiện cho sinh viên không nói đúng được lý do nữa.
 
 Đường ra của `EXTENDED` là **ngày, không phải nút**: hết hạn gia hạn thì tự về `RECONCILING`. Gia hạn mà còn phải bấm lần nữa để đóng lại thì lại thêm một việc để quên.
+
+**Giáo vụ chỉ xếp tay khi cổng đã đóng**, tức ở pha `RECONCILING`, không phải ở `EXTENDED`. Cổng còn mở thì danh sách "chưa có nhóm" đổi ngay dưới tay người đang xếp: một em vừa được kéo vào đề tài thì cùng lúc có thể tự đăng ký chỗ khác, và ghế vừa nhắm cho em này thì em khác lấy mất trước khi thao tác kịp lưu. Chờ hết hạn gia hạn rồi mới xếp không mất gì — số em còn lại lúc đó ít hơn, và danh sách đứng yên trong suốt buổi làm việc.
 
 #### Ba điểm thiết kế bắt buộc
 
@@ -277,6 +279,7 @@ _Bàn phân bổ và lệnh chốt đợt thuộc về giáo vụ, xem **FR_ADM_
     - **Gợi ý theo chuyên ngành khớp**, để giáo vụ không phải tự dò từng đề tài.
     - **Tôn trọng eligibility khi xếp:** kéo một sinh viên vào loại đồ án không mở cho khóa của em thì bị chặn tại chỗ kèm lý do — không để lỗi này lọt tới lúc chốt mới phát hiện. Làm bàn phân bổ theo từng đợt đã loại bỏ phần lớn ca này từ đầu, nhưng luật vẫn phải kiểm ở API: một khóa không được mở loại đồ án của đợt đang xem thì em thuộc khóa đó không được xếp vào, dù em đang hiện trong danh sách chưa có nhóm của học kỳ.
   - **Gia hạn thay vì xếp tay, khi số em chưa có nhóm còn lớn.** Xếp tay là công sức của giáo vụ nhân với số em, còn gia hạn là một cú bấm — và nó trả quyền chọn đề tài lại cho chính người sẽ phải làm đề tài đó. Xếp tay đúng chỗ của nó là **phần còn sót lại** sau khi đã cho các em một cơ hội tự chọn: những em không phản hồi, đã bảo lưu, hoặc thật sự không còn đề tài nào phù hợp.
+  - **Trong lúc gia hạn thì bàn phân bổ đóng.** Ở pha `EXTENDED` giáo vụ không xếp tay — xem mục 1.0. Bàn mở lại khi đợt tự về `RECONCILING`, và lúc đó danh sách bên trái đứng yên trong suốt buổi làm việc thay vì đổi sau lưng người đang kéo.
   - **Xếp sinh viên vào nhóm.** Thành viên được xếp tay mang dấu `join_source = ASSIGNED` cùng người xếp và thời điểm. Không có dấu này thì kỳ sau không trả lời được câu "vừa rồi phải xếp tay bao nhiêu em" — con số mà khoa sẽ hỏi mỗi năm, và cũng là thước đo xem cơ chế tự đăng ký có hiệu quả hay không (FR_ADM_05). Giảng viên chủ đề tài được thông báo (FR_LEC_GRP_03).
   - **Nâng `max_students` của một đề tài** khi cả đợt thiếu ghế. Giảng viên chủ đề tài được thông báo — sức chứa là cam kết hướng dẫn của thầy, nên đổi mà không nói là đổi khối lượng công việc của người khác sau lưng họ.
   - **Chốt đợt** — hành động khối lớn và khó đảo, nên bắt buộc:
