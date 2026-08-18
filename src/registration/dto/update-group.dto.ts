@@ -24,8 +24,14 @@ export const UpdateGroupSchema = z
      * How many of the topic's seats this group is claiming. Bounded by the
      * members already in it and by the topic's capacity, both checked in the
      * service where those numbers are known. Null gives up the claim entirely.
+     *
+     * Two is the floor, matching RegisterTopicSchema: claiming one seat holds
+     * nothing — the leader is already sitting in it — so the value is exactly
+     * equivalent to null while looking like a decision. Accepting it here and
+     * refusing it there let the same field mean two different things depending
+     * on which endpoint you reached it through.
      */
-    declaredSize: z.coerce.number().int().min(1).max(10).nullable().optional(),
+    declaredSize: z.coerce.number().int().min(2).max(10).nullable().optional(),
     /** Give the held seats up now, whatever the declared size says. */
     releaseHold: z.literal(true).optional(),
     /** Hand the group over. Must be a student profile already in the group. */
