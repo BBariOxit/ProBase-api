@@ -19,7 +19,7 @@ import {
   uniqueConstraintName,
 } from '../common/prisma-error.util';
 import { PrismaService } from '../prisma/prisma.service';
-import { SemesterPhaseService } from '../semesters/semester-phase.service';
+import { RoundPhaseService } from '../rounds/round-phase.service';
 import { QueryMyGroupDto } from './dto/query-my-group.dto';
 import { RegisterTopicDto } from './dto/register-topic.dto';
 import { UpdateGroupDto } from './dto/update-group.dto';
@@ -54,8 +54,16 @@ const GROUP_SELECT = {
       title: true,
       maxStudents: true,
       lecturerId: true,
+      // The round is what every phase check is asked of — the group's own
+      // semester is too coarse, since a semester runs one round per kind of
+      // project and they open and close on their own schedules.
+      roundId: true,
       lecturer: { select: { id: true, fullName: true, academicTitle: true } },
-      projectType: { select: { id: true, name: true, code: true } },
+      round: {
+        select: {
+          projectType: { select: { id: true, name: true, code: true } },
+        },
+      },
     },
   },
   members: {
@@ -144,7 +152,7 @@ function statusForSeats(
 export class RegistrationGroupsService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly phases: SemesterPhaseService,
+    private readonly phases: RoundPhaseService,
   ) {}
 
   // ── register ──────────────────────────────────────────────
@@ -160,7 +168,7 @@ export class RegistrationGroupsService {
     const student = await this.requireStudent(userId);
     const topic = await this.requireRegistrableTopic(topicId);
 
-    await this.phases.requireOpen(topic.semesterId);
+    await this.phases.requireCanJoin(topic.roundId, student.id);
     await this.requireEligible(topic, student.cohort);
     await this.requireNoExistingGroup(student.id, topic.semesterId);
 
@@ -308,7 +316,7 @@ export class RegistrationGroupsService {
       topic: {
         id: group.topic.id,
         title: group.topic.title,
-        projectType: group.topic.projectType,
+        projectType: group.topic.round.projectType,
         lecturer: group.topic.lecturer,
       },
       alreadyMember,
@@ -367,7 +375,7 @@ export class RegistrationGroupsService {
     const student = await this.requireStudent(userId);
     const group = await this.requireLeadership(id, student.id);
 
-    await this.phases.requireOpen(group.semesterId);
+    await this.phases.requireCanLeave(group.topic.roundId);
 
     if (dto.leaderId !== undefined) {
       const successor = group.members.find(
@@ -426,7 +434,7 @@ export class RegistrationGroupsService {
     const student = await this.requireStudent(userId);
     const group = await this.requireLeadership(id, student.id);
 
-    await this.phases.requireOpen(group.semesterId);
+    await this.phases.requireCanLeave(group.topic.roundId);
 
     if (studentId === group.leaderId) {
       throw new BadRequestException(
@@ -493,7 +501,7 @@ export class RegistrationGroupsService {
       group = await this.requireLeadership(id, student.id);
     }
 
-    await this.phases.requireOpen(group.semesterId);
+    await this.phases.requireCanLeave(group.topic.roundId);
 
     await this.prisma.$transaction([
       this.prisma.registrationGroupMember.updateMany({
@@ -515,7 +523,7 @@ export class RegistrationGroupsService {
     const student = await this.requireStudent(userId);
     const group = await this.loadGroup(id);
 
-    await this.phases.requireOpen(group.semesterId);
+    await this.phases.requireCanLeave(group.topic.roundId);
 
     const member = group.members.find(
       (candidate) => candidate.studentId === student.id,
@@ -666,13 +674,18 @@ export class RegistrationGroupsService {
    */
   private render(group: GroupRow, viewer: Viewer) {
     const seats = seatBreakdown(group);
-    const { joinCode, members, ...rest } = group;
+    const { joinCode, members, topic, ...rest } = group;
+    const { round, ...topicRest } = topic;
     const isMember = members.some(
       (member) => member.studentId === viewer.studentId,
     );
 
     return {
       ...rest,
+      // Flattened back to the shape callers already read: the kind of project
+      // reaches the topic through its round now, and which table it came from is
+      // not the client's problem.
+      topic: { ...topicRest, projectType: round.projectType },
       members: members.map((member) => {
         const { user, ...student } = member.student;
 
@@ -805,7 +818,7 @@ export class RegistrationGroupsService {
     student: { id: number; cohort: string | null },
     options: { allowHeldSeats: boolean },
   ) {
-    await this.phases.requireOpen(group.semesterId);
+    await this.phases.requireCanJoin(group.topic.roundId, student.id);
 
     const topic = await this.requireRegistrableTopic(group.topicId);
     await this.requireEligible(topic, student.cohort);
@@ -851,10 +864,10 @@ export class RegistrationGroupsService {
       select: {
         id: true,
         semesterId: true,
-        projectTypeId: true,
+        roundId: true,
         maxStudents: true,
         status: true,
-        projectType: { select: { name: true } },
+        round: { select: { projectType: { select: { name: true } } } },
       },
     });
 
@@ -876,11 +889,7 @@ export class RegistrationGroupsService {
    * default filter is a convenience and this is the rule.
    */
   private async requireEligible(
-    topic: {
-      semesterId: number;
-      projectTypeId: number;
-      projectType: { name: string };
-    },
+    topic: { roundId: number; round: { projectType: { name: string } } },
     cohort: string | null,
   ) {
     if (!cohort) {
@@ -889,34 +898,30 @@ export class RegistrationGroupsService {
       );
     }
 
-    const match = await this.prisma.semesterEligibility.findFirst({
-      where: {
-        semesterId: topic.semesterId,
-        projectTypeId: topic.projectTypeId,
-        cohort,
-      },
+    const match = await this.prisma.roundEligibility.findFirst({
+      where: { roundId: topic.roundId, cohort },
       select: { id: true },
     });
 
     if (match) return;
 
     // Told apart because they call for different action: one is a student
-    // looking at the wrong project type, the other is the faculty office not
+    // looking at the wrong kind of project, the other is the faculty office not
     // having declared anything yet, and answering both with "you are not
     // eligible" sends the wrong person looking for the fault.
-    const anyRule = await this.prisma.semesterEligibility.findFirst({
-      where: { semesterId: topic.semesterId },
+    const anyRule = await this.prisma.roundEligibility.findFirst({
+      where: { roundId: topic.roundId },
       select: { id: true },
     });
 
     if (!anyRule) {
       throw new ConflictException(
-        'The faculty office has not yet declared which intakes may take which projects this semester',
+        'The faculty office has not yet declared which intakes may take part in this round',
       );
     }
 
     throw new ForbiddenException(
-      `${topic.projectType.name} is not open to intake ${cohort} this semester`,
+      `${topic.round.projectType.name} is not open to intake ${cohort} this semester`,
     );
   }
 
