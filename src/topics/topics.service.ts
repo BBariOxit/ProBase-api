@@ -9,11 +9,12 @@ import {
   Prisma,
   RegistrationGroupStatus,
   Role,
-  SemesterPhase,
+  RoundPhase,
   TopicStatus,
 } from '../../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { SemesterPhaseService } from '../semesters/semester-phase.service';
+import { RoundPhaseService } from '../rounds/round-phase.service';
+import { RoundsService } from '../rounds/rounds.service';
 import { CreateTopicDto } from './dto/create-topic.dto';
 import { QueryTopicsDto } from './dto/query-topics.dto';
 import { UpdateTopicDto } from './dto/update-topic.dto';
@@ -58,6 +59,25 @@ const ACTIVE_GROUP_SELECT = {
   take: 1,
 } satisfies Prisma.Topic$registrationGroupsArgs;
 
+/**
+ * The round a topic sits in, and through it the kind of project.
+ *
+ * The type is not on the topic any more: a topic belongs to a round, and the
+ * round is a semester crossed with a kind of project. Carrying the type in both
+ * places would be two sources for one fact. Clients still read `projectType` at
+ * the top level — the shape is restored on the way out, because a caller has no
+ * business knowing which table the answer came from.
+ */
+const ROUND_SELECT = {
+  select: {
+    id: true,
+    phase: true,
+    registrationStart: true,
+    registrationEnd: true,
+    projectType: { select: { id: true, name: true, code: true } },
+  },
+} satisfies Prisma.RegistrationRoundDefaultArgs;
+
 /** List rows carry no long-text bodies — those belong to the detail view. */
 const LIST_SELECT = {
   id: true,
@@ -66,13 +86,22 @@ const LIST_SELECT = {
   status: true,
   createdAt: true,
   semester: { select: { id: true, name: true, code: true } },
-  projectType: { select: { id: true, name: true, code: true } },
+  round: ROUND_SELECT,
   lecturer: { select: { id: true, fullName: true, academicTitle: true } },
   registrationGroups: ACTIVE_GROUP_SELECT,
 } satisfies Prisma.TopicSelect;
 
+type TopicRound = {
+  id: number;
+  phase: RoundPhase;
+  registrationStart: Date;
+  registrationEnd: Date;
+  projectType: { id: number; name: string; code: string };
+};
+
 type TopicWithGroups = {
   maxStudents: number;
+  round: TopicRound;
   registrationGroups: {
     id: number;
     status: RegistrationGroupStatus;
@@ -95,6 +124,11 @@ type TopicWithGroups = {
 function withActiveGroup<T extends TopicWithGroups>(
   topic: T,
   /**
+   * The round's phase as of now, which is not always the one on the row: it
+   * advances when somebody asks, and this endpoint is the asking.
+   */
+  phase: RoundPhase,
+  /**
    * What this particular caller may do, when the caller is known.
    *
    * Both booleans mean "the API would accept this from you", not "a seat exists"
@@ -103,11 +137,30 @@ function withActiveGroup<T extends TopicWithGroups>(
    * and the browse screen has no way to know better, since availability is
    * exactly what it is asking this endpoint for.
    */
-  viewer?: { gateOpen: boolean; eligible: boolean },
+  viewer?: { gateOpen: boolean; eligible: boolean; hasGroup: boolean },
 ) {
-  const { registrationGroups, ...rest } = topic;
+  const { registrationGroups, round, ...rest } = topic;
   const group = registrationGroups[0];
-  const allowed = viewer === undefined || (viewer.gateOpen && viewer.eligible);
+  const allowed =
+    viewer === undefined ||
+    (viewer.gateOpen && viewer.eligible && !viewer.hasGroup);
+
+  /**
+   * Flattened back to the shape callers already read. `round` comes along
+   * because the dates and the phase live there now, and a screen counting down
+   * to the deadline has to count down to the right one — a semester running Cơ
+   * sở and Tốt nghiệp closes them on different days.
+   */
+  const placement = {
+    projectTypeId: round.projectType.id,
+    projectType: round.projectType,
+    round: {
+      id: round.id,
+      phase,
+      registrationStart: round.registrationStart,
+      registrationEnd: round.registrationEnd,
+    },
+  };
 
   /**
    * Whether this caller's intake may take this kind of project, or null when the
@@ -123,6 +176,7 @@ function withActiveGroup<T extends TopicWithGroups>(
   if (!group) {
     return {
       ...rest,
+      ...placement,
       activeGroup: null,
       occupiedSeats: 0,
       isFull: false,
@@ -146,6 +200,7 @@ function withActiveGroup<T extends TopicWithGroups>(
 
   return {
     ...rest,
+    ...placement,
     activeGroup: {
       id: group.id,
       status: group.status,
@@ -176,16 +231,8 @@ function withActiveGroup<T extends TopicWithGroups>(
  * or phone number, and this endpoint is readable by every signed-in student.
  */
 const DETAIL_INCLUDE = {
-  semester: {
-    select: {
-      id: true,
-      name: true,
-      code: true,
-      registrationStart: true,
-      registrationEnd: true,
-    },
-  },
-  projectType: { select: { id: true, name: true, code: true } },
+  semester: { select: { id: true, name: true, code: true } },
+  round: ROUND_SELECT,
   lecturer: {
     select: {
       id: true,
@@ -201,7 +248,8 @@ const DETAIL_INCLUDE = {
 export class TopicsService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly phases: SemesterPhaseService,
+    private readonly phases: RoundPhaseService,
+    private readonly rounds: RoundsService,
   ) {}
 
   async findAll(query: QueryTopicsDto, userId: number, role: Role) {
@@ -210,7 +258,11 @@ export class TopicsService {
     };
 
     if (query.semesterId) where.semesterId = query.semesterId;
-    if (query.projectTypeId) where.projectTypeId = query.projectTypeId;
+    // Still asked for by kind of project, which is what a reader picks from a
+    // menu — the round it implies is this layer's problem, not theirs.
+    if (query.projectTypeId) {
+      where.round = { projectTypeId: query.projectTypeId };
+    }
 
     if (query.q) {
       where.OR = [
@@ -229,7 +281,7 @@ export class TopicsService {
     }
 
     if (query.forMyCohort) {
-      where.projectTypeId = { in: await this.eligibleProjectTypeIds(userId) };
+      where.roundId = { in: await this.rounds.eligibleRoundIds(userId) };
     }
 
     const [items, total] = await this.prisma.$transaction([
@@ -243,10 +295,17 @@ export class TopicsService {
       this.prisma.topic.count({ where }),
     ]);
 
-    const viewers = await this.availabilityFor(items, userId, role);
+    const phases = await this.resolveRoundPhases(items);
+    const viewers = await this.availabilityFor(items, userId, role, phases);
 
     return {
-      items: items.map((topic) => withActiveGroup(topic, viewers(topic))),
+      items: items.map((topic) =>
+        withActiveGroup(
+          topic,
+          phases.get(topic.round.id) ?? topic.round.phase,
+          viewers(topic),
+        ),
+      ),
       total,
       page: query.page,
       limit: query.limit,
@@ -255,28 +314,17 @@ export class TopicsService {
   }
 
   /**
-   * The project types the caller's intake may take, across every semester.
+   * Brings every round on the page up to date, once per round rather than once
+   * per topic.
    *
-   * Fails closed: an account with no intake on file, or an office that has not
-   * declared the rules yet, gets an empty list rather than the whole catalogue.
-   * The filter exists to show a student what is actually theirs, and guessing
-   * generously here would defeat it.
+   * A page of twenty topics is usually two or three rounds, and the phase
+   * advances on being asked — so asking per row would be twenty reads and, worse,
+   * twenty chances to write the same advance.
    */
-  private async eligibleProjectTypeIds(userId: number) {
-    const profile = await this.prisma.studentProfile.findUnique({
-      where: { userId },
-      select: { cohort: true },
-    });
+  private resolveRoundPhases(items: { round: TopicRound }[]) {
+    const unique = new Map(items.map((topic) => [topic.round.id, topic.round]));
 
-    if (!profile?.cohort) return [];
-
-    const rules = await this.prisma.semesterEligibility.findMany({
-      where: { cohort: profile.cohort },
-      select: { projectTypeId: true },
-      distinct: ['projectTypeId'],
-    });
-
-    return rules.map((rule) => rule.projectTypeId);
+    return this.phases.resolveMany([...unique.values()]);
   }
 
   /**
@@ -288,49 +336,56 @@ export class TopicsService {
    * a candidate for a seat and blanking the fields would just look broken.
    */
   private async availabilityFor(
-    items: { semester: { id: number }; projectType: { id: number } }[],
+    items: { semester: { id: number }; round: TopicRound }[],
     userId: number,
     role: Role,
+    phases: Map<number, RoundPhase>,
   ) {
     if (role !== Role.STUDENT || items.length === 0) return () => undefined;
 
-    // Resolved rather than read off the joined row, so a gate that closed a
-    // minute ago is closed here too: the phase advances on being asked, and a
-    // page of buttons is a bad place to be the last to find out.
     const semesterIds = [...new Set(items.map((topic) => topic.semester.id))];
-    const phases = new Map(
-      await Promise.all(
-        semesterIds.map(
-          async (id) => [id, await this.phases.resolve(id)] as const,
-        ),
-      ),
-    );
 
-    const profile = await this.prisma.studentProfile.findUnique({
-      where: { userId },
-      select: { cohort: true },
-    });
-
-    // One query for every rule on the page, keyed the way it is asked.
-    const rules = profile?.cohort
-      ? await this.prisma.semesterEligibility.findMany({
-          where: { semesterId: { in: semesterIds }, cohort: profile.cohort },
-          select: { semesterId: true, projectTypeId: true },
-        })
-      : [];
     const eligible = new Set(
-      rules.map((rule) => `${rule.semesterId}:${rule.projectTypeId}`),
+      await this.rounds.eligibleRoundIds(userId, semesterIds),
     );
 
-    return (topic: {
-      semester: { id: number };
-      projectType: { id: number };
-    }) => ({
-      gateOpen: phases.get(topic.semester.id) === SemesterPhase.OPEN,
-      // The register endpoint refuses a project type the caller's intake is not
-      // open for, so a button offering it here would be a button that lies.
-      eligible: eligible.has(`${topic.semester.id}:${topic.projectType.id}`),
+    // A student who is already in a group cannot take another topic — one group
+    // per semester, enforced by the database. Without this the browse screen
+    // would offer a register button to everyone who already has a place, which
+    // is nearly the whole cohort once an extension is running.
+    const taken = await this.semestersWhereIHaveAGroup(userId, semesterIds);
+
+    return (topic: { semester: { id: number }; round: TopicRound }) => {
+      const phase = phases.get(topic.round.id) ?? topic.round.phase;
+
+      return {
+        // An extension reopens the gate, so it counts as open here — what stops
+        // it applying to a student who already has a group is `hasGroup`, which
+        // is the same rule the register endpoint enforces.
+        gateOpen: phase === RoundPhase.OPEN || phase === RoundPhase.EXTENDED,
+        // The register endpoint refuses a round the caller's intake is not open
+        // for, so a button offering it here would be a button that lies.
+        eligible: eligible.has(topic.round.id),
+        hasGroup: taken.has(topic.semester.id),
+      };
+    };
+  }
+
+  private async semestersWhereIHaveAGroup(
+    userId: number,
+    semesterIds: number[],
+  ) {
+    const rows = await this.prisma.registrationGroupMember.findMany({
+      where: {
+        student: { userId },
+        semesterId: { in: semesterIds },
+        status: GroupMemberStatus.ACCEPTED,
+        group: { status: { not: RegistrationGroupStatus.REJECTED } },
+      },
+      select: { semesterId: true },
     });
+
+    return new Set(rows.map((row) => row.semesterId));
   }
 
   /**
@@ -372,20 +427,24 @@ export class TopicsService {
       throw new NotFoundException('Topic not found');
     }
 
-    // The gate is the semester's phase, and only the phase. Comparing the dates
+    // The gate is the round's phase, and only the phase. Comparing the dates
     // here as well would quietly overrule an office that opened registration
     // early or held it shut, which the phase exists to let them do.
-    const phase = await this.phases.resolve(topic.semesterId);
-    const viewer = await this.availabilityFor([topic], userId, role);
+    const phases = await this.resolveRoundPhases([topic]);
+    const phase = phases.get(topic.round.id) ?? topic.round.phase;
+    const viewer = await this.availabilityFor([topic], userId, role, phases);
 
     return {
-      ...withActiveGroup(topic, viewer(topic)),
-      semesterPhase: phase,
-      // Saves the client a second request to the semester just to decide whether
+      ...withActiveGroup(topic, phase, viewer(topic)),
+      roundPhase: phase,
+      // Saves the client a second request to the round just to decide whether
       // the register button should be live. This one is about the topic and the
       // calendar only — whether *this* caller may take it is canRegister/canJoin.
+      // An extension counts as open: it is a gate somebody may still walk
+      // through, even though not everybody.
       isRegistrationOpen:
-        topic.status === TopicStatus.OPEN && phase === SemesterPhase.OPEN,
+        topic.status === TopicStatus.OPEN &&
+        (phase === RoundPhase.OPEN || phase === RoundPhase.EXTENDED),
     };
   }
 
@@ -393,16 +452,19 @@ export class TopicsService {
     const lecturerId = await this.requireLecturerProfileId(userId);
 
     // Checked up front so a bad reference reads as a 404 on the field the
-    // caller got wrong, rather than a raw foreign-key violation.
+    // caller got wrong, rather than a raw foreign-key violation. Choosing a kind
+    // of project is choosing the round, and one the faculty has not opened is
+    // refused here rather than left in the catalogue for students to bounce off.
     await this.requireSemester(dto.semesterId);
-    await this.requireProjectType(dto.projectTypeId);
+    const { semesterId, projectTypeId, ...rest } = dto;
+    const round = await this.rounds.requireRoundFor(semesterId, projectTypeId);
 
     const topic = await this.prisma.topic.create({
-      data: { ...dto, lecturerId },
+      data: { ...rest, semesterId, roundId: round.id, lecturerId },
       include: DETAIL_INCLUDE,
     });
 
-    return withActiveGroup(topic);
+    return this.presentDetail(topic);
   }
 
   async update(id: number, dto: UpdateTopicDto, userId: number, role: Role) {
@@ -417,15 +479,22 @@ export class TopicsService {
       );
     }
 
-    if (dto.projectTypeId) await this.requireProjectType(dto.projectTypeId);
+    const { projectTypeId, ...rest } = dto;
+
+    // Moving a topic to another kind of project moves it to another round, and
+    // only within its own semester — the composite foreign key would refuse
+    // anything else, and a clear 409 beats a driver error.
+    const roundId = projectTypeId
+      ? (await this.rounds.requireRoundFor(topic.semesterId, projectTypeId)).id
+      : undefined;
 
     const updated = await this.prisma.topic.update({
       where: { id },
-      data: dto,
+      data: { ...rest, ...(roundId !== undefined && { roundId }) },
       include: DETAIL_INCLUDE,
     });
 
-    return withActiveGroup(updated);
+    return this.presentDetail(updated);
   }
 
   async remove(id: number, userId: number, role: Role) {
@@ -488,7 +557,22 @@ export class TopicsService {
       include: DETAIL_INCLUDE,
     });
 
-    return withActiveGroup(topic);
+    return this.presentDetail(topic);
+  }
+
+  /**
+   * A single topic, with its round's phase brought up to date rather than read
+   * off the row. Every write path returns through here, and a response that
+   * reported a gate as open a minute after it shut would be the one place a
+   * client had no reason to doubt.
+   */
+  private async presentDetail<T extends TopicWithGroups>(topic: T) {
+    const phases = await this.phases.resolveMany([topic.round]);
+
+    return withActiveGroup(
+      topic,
+      phases.get(topic.round.id) ?? topic.round.phase,
+    );
   }
 
   private async requireTopic(id: number) {
@@ -498,6 +582,7 @@ export class TopicsService {
         id: true,
         status: true,
         lecturerId: true,
+        semesterId: true,
         _count: {
           select: {
             registrationGroups: {
@@ -560,16 +645,6 @@ export class TopicsService {
     });
 
     if (!semester) throw new NotFoundException(`Semester ${id} not found`);
-  }
-
-  private async requireProjectType(id: number) {
-    const projectType = await this.prisma.projectType.findUnique({
-      where: { id },
-      select: { id: true },
-    });
-
-    if (!projectType)
-      throw new NotFoundException(`Project type ${id} not found`);
   }
 }
 

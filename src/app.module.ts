@@ -10,6 +10,7 @@ import { MajorsModule } from './majors/majors.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { ProjectTypesModule } from './project-types/project-types.module';
 import { RegistrationModule } from './registration/registration.module';
+import { RoundsModule } from './rounds/rounds.module';
 import { SemestersModule } from './semesters/semesters.module';
 import { TopicsModule } from './topics/topics.module';
 import { UsersModule } from './users/users.module';
@@ -39,6 +40,7 @@ import { UsersModule } from './users/users.module';
     PrismaModule,
     AuthModule,
     MajorsModule,
+    RoundsModule,
     SemestersModule,
     ProjectTypesModule,
     TopicsModule,

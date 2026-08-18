@@ -1,17 +1,18 @@
 import { Module } from '@nestjs/common';
-import { SemesterPhaseService } from './semester-phase.service';
+import { RoundsModule } from '../rounds/rounds.module';
 import { SemestersController } from './semesters.controller';
 import { SemestersService } from './semesters.service';
 
 /**
- * SemesterPhaseService is exported rather than kept private: the phase gates
- * registration, and later the allocation desk, and a second implementation of
- * the lazy advance is a second chance for two parts of the system to disagree
- * about which stage a semester is at.
+ * Imports RoundsModule rather than owning the rounds itself. A term's
+ * registration plan is published under `/semesters/:id/rounds` because that is
+ * how the office thinks of it, but it is the same plan `/rounds` serves, and one
+ * implementation is what keeps the two from drifting apart.
  */
 @Module({
+  imports: [RoundsModule],
   controllers: [SemestersController],
-  providers: [SemestersService, SemesterPhaseService],
-  exports: [SemestersService, SemesterPhaseService],
+  providers: [SemestersService],
+  exports: [SemestersService],
 })
 export class SemestersModule {}

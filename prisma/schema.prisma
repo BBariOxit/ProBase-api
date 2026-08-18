@@ -21,23 +21,27 @@ enum Role {
   STUDENT
 }
 
-// How a semester hands topics out. FIRST_COME is the whole of v1: the first
-// group to take a topic owns it. PREFERENCE_ROUND is declared now and not yet
+// How a round hands topics out. FIRST_COME is the whole of v1: the first group
+// to take a topic owns it. PREFERENCE_ROUND is declared now and not yet
 // implemented, so that adding it later is an extension of registration rather
 // than a rewrite of it.
+//
+// Per round rather than per semester: a faculty that ever changes mechanism will
+// try it on one kind of project first — almost certainly the final-year one —
+// not flip a whole term at once.
 enum AllocationMode {
   FIRST_COME
   PREFERENCE_ROUND
 }
 
-/// The four stages a semester's registration passes through.
+/// The five stages a registration round passes through.
 ///
 /// This is a stored column rather than something derived from
 /// `registrationEnd`, and that is the point of it. A date can say the gate has
 /// closed, but nothing about a date can record that the office has *finished*
 /// placing the students who ended up without a group — so RECONCILING would
 /// never end. Dates are the trigger; this column is the truth.
-enum SemesterPhase {
+enum RoundPhase {
   /// Lecturers write topics; students can look but not register.
   PREP
 
@@ -47,6 +51,12 @@ enum SemesterPhase {
   /// The gate has closed. Students are read-only and the faculty office places
   /// whoever has no group.
   RECONCILING
+
+  /// The gate reopened, but only one way. A student with no group may still
+  /// register or join; a student who has one cannot leave, disband or be
+  /// removed, because the allocation being assembled must not move underneath
+  /// the person assembling it. Ends on a date, not a second button press.
+  EXTENDED
 
   /// Allocation is final and project work begins.
   FINALIZED
@@ -130,14 +140,14 @@ enum NotificationType {
 // ─────────────────────────────────────────────────────────
 
 model User {
-  id                  Int      @id @default(autoincrement())
-  email               String   @unique
-  password            String   // Bcrypt / Argon2 hash — never store plaintext
-  role                Role
-  isActive            Boolean  @default(true)
-  mustChangePassword  Boolean  @default(false) // true = admin-created, user must change on first login
-  createdAt           DateTime @default(now())
-  updatedAt           DateTime @updatedAt
+  id                 Int      @id @default(autoincrement())
+  email              String   @unique
+  password           String // Bcrypt / Argon2 hash — never store plaintext
+  role               Role
+  isActive           Boolean  @default(true)
+  mustChangePassword Boolean  @default(false) // true = admin-created, user must change on first login
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
 
   // Brute-force protection, counted against the account rather than the caller's
   // IP address. An attacker can rent a new address for every guess, but every
@@ -149,15 +159,15 @@ model User {
   passwordRetryAfter  DateTime? // Set while a backoff delay is in force
 
   // Relations
-  studentProfile  StudentProfile?
-  lecturerProfile LecturerProfile?
-  notifications   Notification[]
-  auditLogs       AuditLog[]
-  refreshTokens   RefreshToken[]
+  studentProfile      StudentProfile?
+  lecturerProfile     LecturerProfile?
+  notifications       Notification[]
+  auditLogs           AuditLog[]
+  refreshTokens       RefreshToken[]
   passwordResetTokens PasswordResetToken[]
 
-  semestersFinalised Semester[]                @relation("SemesterFinalisedBy")
-  membersAssigned    RegistrationGroupMember[] @relation("GroupMemberAssignedBy")
+  roundsFinalised RegistrationRound[]       @relation("RoundFinalisedBy")
+  membersAssigned RegistrationGroupMember[] @relation("GroupMemberAssignedBy")
 
   @@map("users")
 }
@@ -176,30 +186,30 @@ model StudentProfile {
   /// Free-text note kept by the faculty office ("deferred HK1", "rang, no
   /// answer"). Every real administrative system needs one: without it the
   /// information moves to somebody's private spreadsheet and leaves the system.
-  note        String? @db.Text
+  note String? @db.Text
 
   // Relations
   user  User   @relation(fields: [userId], references: [id], onDelete: Cascade)
   major Major? @relation(fields: [majorId], references: [id], onDelete: SetNull)
 
-  proposedTopics TopicProposal[] @relation("ProposalStudent")
-  groupsLed      RegistrationGroup[]
+  proposedTopics   TopicProposal[]           @relation("ProposalStudent")
+  groupsLed        RegistrationGroup[]
   groupMemberships RegistrationGroupMember[]
-  councilGrades  CouncilTopicGrade[]
+  councilGrades    CouncilTopicGrade[]
 
   @@map("student_profiles")
 }
 
 model LecturerProfile {
-  id               Int     @id @default(autoincrement())
-  userId           Int     @unique
-  lecturerCode     String  @unique
-  fullName         String
-  academicTitle    String?
-  phone            String?
-  bio              String?
+  id                Int     @id @default(autoincrement())
+  userId            Int     @unique
+  lecturerCode      String  @unique
+  fullName          String
+  academicTitle     String?
+  phone             String?
+  bio               String?
   researchInterests String?
-  maxMentoringQuota Int?   // Null = no limit
+  maxMentoringQuota Int? // Null = no limit
 
   // Relations
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -238,35 +248,30 @@ model Semester {
   code                    String    @unique
   startDate               DateTime
   endDate                 DateTime
-  registrationStart       DateTime  // Window opens for topic registration
-  registrationEnd         DateTime  // Window closes for topic registration
   gradeSubmissionDeadline DateTime? // After this, grades are locked
   isActive                Boolean   @default(false)
 
   // The final-grade formula is data, not code: a faculty that reweights
   // mentor/reviewer/council between intakes must not silently recompute the
   // grades of semesters already closed. Expected to sum to 1.
-  mentorWeight            Float     @default(0.4)
-  reviewerWeight          Float     @default(0.3)
-  councilWeight           Float     @default(0.3)
+  mentorWeight   Float @default(0.4)
+  reviewerWeight Float @default(0.3)
+  councilWeight  Float @default(0.3)
 
-  allocationMode AllocationMode @default(FIRST_COME)
-
-  phase SemesterPhase @default(PREP)
-
-  // Who ended the RECONCILING phase and when. Finalising allocation turns every
-  // group's membership into the official record, so it is an event with an
-  // author rather than a flag that flips.
-  finalisedAt   DateTime?
-  finalisedById Int?
+  // The registration window, the phase and the finalisation live on
+  // RegistrationRound, not here. A faculty opens Cơ sở, Chuyên ngành and Tốt
+  // nghiệp in the same semester for three different intakes, and those three
+  // share no seat with one another — so "is registration open" and "has
+  // allocation been settled" have one answer per kind of project, not one per
+  // semester. What stays here is what genuinely spans the whole term: its dates,
+  // the grading deadline, and the grade weights.
 
   // Relations
+  rounds             RegistrationRound[]
   topics             Topic[]
   topicProposals     TopicProposal[]
   registrationGroups RegistrationGroup[]
   councils           Council[]
-  eligibilities      SemesterEligibility[]
-  finalisedBy        User?                 @relation("SemesterFinalisedBy", fields: [finalisedById], references: [id], onDelete: SetNull)
 
   @@map("semesters")
 }
@@ -282,20 +287,74 @@ model Semester {
 /// `cohort` is the year of admission as four digits ("2022"), the same form
 /// StudentProfile.cohort takes, because that is what the student code encodes.
 /// A cohort doing two kinds of project in one semester is simply two rows.
-model SemesterEligibility {
-  id            Int    @id @default(autoincrement())
+/// One registration round: a semester crossed with a kind of project.
+///
+/// "Đợt Đồ án Cơ sở HK1" is the unit the faculty actually announces, and the
+/// unit in which every registration question has an answer. A semester usually
+/// runs three at once — Cơ sở for one intake, Chuyên ngành for the next, Tốt
+/// nghiệp for the one after — and no seat is shared between them, so asking a
+/// whole semester how many places are left adds up numbers that cannot be added.
+///
+/// A round is not a second thing for the office to fill in: declaring that an
+/// intake may take a kind of project this semester is what creates one.
+model RegistrationRound {
+  id            Int @id @default(autoincrement())
   semesterId    Int
   projectTypeId Int
-  cohort        String
 
+  registrationStart DateTime // Gate opens
+  registrationEnd   DateTime // Gate closes; an extension moves this date forward
+
+  phase RoundPhase @default(PREP)
+
+  allocationMode AllocationMode @default(FIRST_COME)
+
+  /// Who ended the RECONCILING phase and when. Finalising turns every group's
+  /// membership into the official record, so it is an event with an author
+  /// rather than a flag that flips — and it is per round, so Tốt nghiệp can be
+  /// settled while Cơ sở is still being placed.
+  finalisedAt   DateTime?
+  finalisedById Int?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
   semester    Semester    @relation(fields: [semesterId], references: [id], onDelete: Cascade)
   projectType ProjectType @relation(fields: [projectTypeId], references: [id], onDelete: Restrict)
+  finalisedBy User?       @relation("RoundFinalisedBy", fields: [finalisedById], references: [id], onDelete: SetNull)
 
-  @@unique([semesterId, projectTypeId, cohort])
-  // Answering "what may this student take" is the hot path: one cohort, one
-  // semester, every eligible type.
-  @@index([semesterId, cohort])
-  @@map("semester_eligibilities")
+  eligibilities RoundEligibility[]
+  topics        Topic[]
+
+  @@unique([semesterId, projectTypeId])
+  // Lets Topic carry a denormalised semesterId that a composite foreign key pins
+  // to this round's own semester, so the two cannot drift.
+  @@unique([id, semesterId])
+  @@map("registration_rounds")
+}
+
+/// Which intake may take part in a round.
+///
+/// Faculty policy the office types in, never inferred from a student's year:
+/// inferring breaks immediately for anyone repeating, deferring or moving ahead,
+/// and that group is not small. The round already carries the kind of project,
+/// so a row here names only the intake.
+///
+/// An intake offered two kinds of project in one semester gets two rows in two
+/// rounds — two choices, not two places. Only one group per student per
+/// semester is allowed, and that rule stays at semester level.
+model RoundEligibility {
+  id      Int    @id @default(autoincrement())
+  roundId Int
+  cohort  String // Year of admission, matching StudentProfile.cohort — "2022"
+
+  round RegistrationRound @relation(fields: [roundId], references: [id], onDelete: Cascade)
+
+  // Doubles as the index for "which intakes is this round open to", which is the
+  // hot read.
+  @@unique([roundId, cohort])
+  @@map("round_eligibilities")
 }
 
 model ProjectType {
@@ -304,9 +363,12 @@ model ProjectType {
   code String @unique
 
   // Relations
-  topics         Topic[]
+  //
+  // No `topics` back-relation: a topic reaches its project type through the
+  // round it belongs to. Carrying the type on the topic as well would be two
+  // sources for one fact, and they would eventually disagree.
+  rounds         RegistrationRound[]
   topicProposals TopicProposal[]
-  eligibilities  SemesterEligibility[]
 
   @@map("project_types")
 }
@@ -316,24 +378,24 @@ model ProjectType {
 // ─────────────────────────────────────────────────────────
 
 model TopicProposal {
-  id                    Int                 @id @default(autoincrement())
-  semesterId            Int
-  studentId             Int
-  projectTypeId         Int
-  title                 String
-  description           String              @db.Text
-  expectedOutcomes      String              @db.Text
-  requestedLecturerId   Int?                // Nullable — student may leave open
-  acceptedByLecturerId  Int?                // Set when a lecturer approves
-  status                TopicProposalStatus @default(PENDING)
-  lecturerFeedback      String?             @db.Text
-  createdAt             DateTime            @default(now())
-  updatedAt             DateTime            @updatedAt
+  id                   Int                 @id @default(autoincrement())
+  semesterId           Int
+  studentId            Int
+  projectTypeId        Int
+  title                String
+  description          String              @db.Text
+  expectedOutcomes     String              @db.Text
+  requestedLecturerId  Int? // Nullable — student may leave open
+  acceptedByLecturerId Int? // Set when a lecturer approves
+  status               TopicProposalStatus @default(PENDING)
+  lecturerFeedback     String?             @db.Text
+  createdAt            DateTime            @default(now())
+  updatedAt            DateTime            @updatedAt
 
   // Relations
-  semester           Semester        @relation(fields: [semesterId], references: [id], onDelete: Restrict)
-  student            StudentProfile  @relation("ProposalStudent", fields: [studentId], references: [id], onDelete: Cascade)
-  projectType        ProjectType     @relation(fields: [projectTypeId], references: [id], onDelete: Restrict)
+  semester           Semester         @relation(fields: [semesterId], references: [id], onDelete: Restrict)
+  student            StudentProfile   @relation("ProposalStudent", fields: [studentId], references: [id], onDelete: Cascade)
+  projectType        ProjectType      @relation(fields: [projectTypeId], references: [id], onDelete: Restrict)
   requestedLecturer  LecturerProfile? @relation("ProposalRequestedLecturer", fields: [requestedLecturerId], references: [id], onDelete: SetNull)
   acceptedByLecturer LecturerProfile? @relation("ProposalAcceptedLecturer", fields: [acceptedByLecturerId], references: [id], onDelete: SetNull)
 
@@ -351,7 +413,9 @@ model Topic {
   id               Int         @id @default(autoincrement())
   semesterId       Int
   lecturerId       Int
-  projectTypeId    Int
+  // The round is the semester and the kind of project at once, so a topic can
+  // only exist in a round the faculty has actually opened.
+  roundId          Int
   sourceProposalId Int?        @unique // Set only if topic originated from a student proposal
   title            String
   description      String      @db.Text
@@ -362,10 +426,12 @@ model Topic {
   updatedAt        DateTime    @updatedAt
 
   // Relations
-  semester       Semester        @relation(fields: [semesterId], references: [id], onDelete: Restrict)
-  lecturer       LecturerProfile @relation(fields: [lecturerId], references: [id], onDelete: Restrict)
-  projectType    ProjectType     @relation(fields: [projectTypeId], references: [id], onDelete: Restrict)
-  sourceProposal TopicProposal?  @relation(fields: [sourceProposalId], references: [id], onDelete: SetNull)
+  semester       Semester          @relation(fields: [semesterId], references: [id], onDelete: Restrict)
+  lecturer       LecturerProfile   @relation(fields: [lecturerId], references: [id], onDelete: Restrict)
+  // Composite, so a topic cannot end up in a round that belongs to a different
+  // semester than the one it claims.
+  round          RegistrationRound @relation(fields: [roundId, semesterId], references: [id, semesterId], onDelete: Restrict)
+  sourceProposal TopicProposal?    @relation(fields: [sourceProposalId], references: [id], onDelete: SetNull)
 
   registrationGroups RegistrationGroup[]
   submissions        Submission[]
@@ -374,17 +440,20 @@ model Topic {
   // Lets RegistrationGroup carry a denormalised semesterId that a composite
   // foreign key pins to this topic's own semester, so the two cannot drift.
   @@unique([id, semesterId])
+  // Browsing is always "the topics in this round", so the list query filters on
+  // it every time.
+  @@index([roundId])
   @@map("topics")
 }
 
 model RegistrationGroup {
-  id              Int                     @id @default(autoincrement())
-  topicId         Int
-  semesterId      Int
-  leaderId        Int                     // FK → StudentProfile
-  name            String?
-  status          RegistrationGroupStatus @default(FORMING)
-  lecturerFeedback String?                @db.Text
+  id               Int                     @id @default(autoincrement())
+  topicId          Int
+  semesterId       Int
+  leaderId         Int // FK → StudentProfile
+  name             String?
+  status           RegistrationGroupStatus @default(FORMING)
+  lecturerFeedback String?                 @db.Text
 
   /// Whether the group is still willing to take anyone else.
   ///
@@ -396,12 +465,12 @@ model RegistrationGroup {
   ///
   /// Note this is only half the answer: during the hold window below, a group
   /// is open in principle but reachable only through its join link.
-  openForJoin     Boolean                 @default(true)
+  openForJoin Boolean @default(true)
 
   /// How many students the leader said they intend to bring, if they said.
   ///
   /// Null means they did not, and the seats were never held at all.
-  declaredSize    Int?
+  declaredSize Int?
 
   /// When the held seats stop being held. Null, or a time already past, means
   /// the remaining seats are open to anyone.
@@ -410,7 +479,7 @@ model RegistrationGroup {
   /// cancellation path — a member leaving, a group disbanding, an account being
   /// locked — has to remember to undo it. Everything that frees a seat reopens
   /// the topic without a line of code recalling that it should.
-  holdUntil       DateTime?
+  holdUntil DateTime?
 
   /// The secret in the group's join link.
   ///
@@ -418,16 +487,16 @@ model RegistrationGroup {
   /// walk into exactly the seat being held for a friend. Kept after the hold
   /// expires so an old link still resolves to the right group rather than
   /// 404ing — by then it grants nothing the topic page does not.
-  joinCode        String?                 @unique
+  joinCode String? @unique
 
-  createdAt       DateTime                @default(now())
-  updatedAt       DateTime                @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   // The topic relation is composite: it carries semesterId too, so a group can
   // never claim a semester its own topic does not belong to.
-  topic     Topic          @relation(fields: [topicId, semesterId], references: [id, semesterId], onDelete: Restrict)
-  semester  Semester       @relation(fields: [semesterId], references: [id], onDelete: Restrict)
-  leader    StudentProfile @relation(fields: [leaderId], references: [id], onDelete: Restrict)
+  topic    Topic          @relation(fields: [topicId, semesterId], references: [id, semesterId], onDelete: Restrict)
+  semester Semester       @relation(fields: [semesterId], references: [id], onDelete: Restrict)
+  leader   StudentProfile @relation(fields: [leaderId], references: [id], onDelete: Restrict)
 
   members      RegistrationGroupMember[]
   submissions  Submission[]
@@ -440,21 +509,21 @@ model RegistrationGroup {
 }
 
 model RegistrationGroupMember {
-  id           Int               @id @default(autoincrement())
-  groupId      Int
+  id         Int @id @default(autoincrement())
+  groupId    Int
   // Denormalised from the group purely so the "one accepted membership per
   // student per semester" index below can exist — a unique index cannot span
   // two tables. The composite foreign key keeps it honest.
-  semesterId   Int
-  studentId    Int
+  semesterId Int
+  studentId  Int
 
   /// Only ACCEPTED is written now that joining is a single action: a student is
   /// either in the group or not. INVITED and DECLINED stay in the enum because
   /// the partial unique index below is defined in terms of ACCEPTED and rows
   /// from the invitation model may still exist.
-  status       GroupMemberStatus @default(ACCEPTED)
+  status GroupMemberStatus @default(ACCEPTED)
 
-  joinSource   GroupJoinSource   @default(SELF)
+  joinSource GroupJoinSource @default(SELF)
 
   // Only set for joinSource = ASSIGNED. Points at User rather than
   // LecturerProfile because the faculty office places students, and it does so
@@ -462,10 +531,10 @@ model RegistrationGroupMember {
   assignedById Int?
   assignedAt   DateTime?
 
-  mentorGrade  Float?            // Per-student grade from supervising lecturer
-  mentorComment String?          @db.Text
-  joinedAt     DateTime?         // When the student came into the group
-  createdAt    DateTime          @default(now())
+  mentorGrade   Float? // Per-student grade from supervising lecturer
+  mentorComment String?   @db.Text
+  joinedAt      DateTime? // When the student came into the group
+  createdAt     DateTime  @default(now())
 
   // Relations
   group      RegistrationGroup @relation(fields: [groupId, semesterId], references: [id, semesterId], onDelete: Cascade)
@@ -485,17 +554,17 @@ model RegistrationGroupMember {
 // ─────────────────────────────────────────────────────────
 
 model Submission {
-  id              Int            @id @default(autoincrement())
-  topicId         Int
-  groupId         Int
-  submissionType  SubmissionType
-  fileUrl         String?        // Cloud storage path (S3, GCS, etc.)
-  submissionUrl   String?        // External link (GitHub, Google Drive, etc.)
-  fileName        String?
-  fileSize        Int?           // Bytes
-  version         Int            @default(1) // Incremented on each re-submission
-  lecturerFeedback String?       @db.Text
-  submittedAt     DateTime       @default(now())
+  id               Int            @id @default(autoincrement())
+  topicId          Int
+  groupId          Int
+  submissionType   SubmissionType
+  fileUrl          String? // Cloud storage path (S3, GCS, etc.)
+  submissionUrl    String? // External link (GitHub, Google Drive, etc.)
+  fileName         String?
+  fileSize         Int? // Bytes
+  version          Int            @default(1) // Incremented on each re-submission
+  lecturerFeedback String?        @db.Text
+  submittedAt      DateTime       @default(now())
 
   // Two constraints on purpose: `topic` keeps direct navigation and querying,
   // while the composite `group` key pins topicId to the group's own topic so
@@ -512,12 +581,12 @@ model Submission {
 // ─────────────────────────────────────────────────────────
 
 model Council {
-  id         Int      @id @default(autoincrement())
-  semesterId Int
-  name       String
-  location   String?
+  id          Int      @id @default(autoincrement())
+  semesterId  Int
+  name        String
+  location    String?
   defenseDate DateTime
-  createdAt  DateTime @default(now())
+  createdAt   DateTime @default(now())
 
   // Relations
   semester Semester        @relation(fields: [semesterId], references: [id], onDelete: Restrict)
@@ -542,19 +611,19 @@ model CouncilMember {
 }
 
 model CouncilTopic {
-  id         Int       @id @default(autoincrement())
+  id         Int     @id @default(autoincrement())
   councilId  Int
-  topicId    Int       @unique // Each topic is defended in exactly one council session
-  groupId    Int       @unique // Each group presents in exactly one council session
-  reviewerId Int       // Assigned reviewer (GV Phản biện)
+  topicId    Int     @unique // Each topic is defended in exactly one council session
+  groupId    Int     @unique // Each group presents in exactly one council session
+  reviewerId Int // Assigned reviewer (GV Phản biện)
   timeSlot   String?
 
   // Relations
-  council  Council         @relation(fields: [councilId], references: [id], onDelete: Cascade)
-  topic    Topic           @relation(fields: [topicId], references: [id], onDelete: Restrict)
+  council  Council           @relation(fields: [councilId], references: [id], onDelete: Cascade)
+  topic    Topic             @relation(fields: [topicId], references: [id], onDelete: Restrict)
   // Composite: the defending group and the topic being defended must agree.
   group    RegistrationGroup @relation(fields: [groupId, topicId], references: [id, topicId], onDelete: Restrict)
-  reviewer LecturerProfile @relation(fields: [reviewerId], references: [id], onDelete: Restrict)
+  reviewer LecturerProfile   @relation(fields: [reviewerId], references: [id], onDelete: Restrict)
 
   grades CouncilTopicGrade[]
 
@@ -563,7 +632,7 @@ model CouncilTopic {
 }
 
 model CouncilTopicGrade {
-  id             Int    @id @default(autoincrement())
+  id             Int       @id @default(autoincrement())
   councilTopicId Int
   studentId      Int
   councilGrade   Float? // Grade from the full council panel
@@ -613,11 +682,11 @@ model Notification {
 model AuditLog {
   id          Int      @id @default(autoincrement())
   userId      Int
-  action      String   // e.g. UPDATE_GRADE, DELETE_TOPIC, LOCK_ACCOUNT
-  targetTable String   // Table name affected
-  targetId    String   // Stringified PK of the affected record
-  oldValue    Json?    // Snapshot before the change
-  newValue    Json?    // Snapshot after the change
+  action      String // e.g. UPDATE_GRADE, DELETE_TOPIC, LOCK_ACCOUNT
+  targetTable String // Table name affected
+  targetId    String // Stringified PK of the affected record
+  oldValue    Json? // Snapshot before the change
+  newValue    Json? // Snapshot after the change
   createdAt   DateTime @default(now())
 
   // Relations
@@ -647,12 +716,10 @@ model RefreshToken {
  * A password-reset link is a credential: whoever holds it can take the account.
  * So it is stored the way the refresh token is — only the SHA-256 hash, never
  * the value that was emailed. A database leak then yields nothing usable.
- *
  * SHA-256 rather than bcrypt is deliberate. Bcrypt is slow on purpose, to make
  * offline guessing of low-entropy secrets expensive; a 32-byte random token has
  * 256 bits of entropy and no guessing surface at all, so the cost would buy
  * nothing and be paid on every validation.
- *
  * Rows are deleted on use and superseded whenever a fresh link is requested, so
  * "single use" and "one live link per account" are properties of the table
  * rather than promises made by the service.
@@ -670,4 +737,3 @@ model PasswordResetToken {
   @@index([userId])
   @@map("password_reset_tokens")
 }
-

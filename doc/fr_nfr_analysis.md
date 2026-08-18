@@ -8,24 +8,65 @@ Tài liệu này định nghĩa chi tiết các yêu cầu để xây dựng H�
 
 Yêu cầu chức năng được phân tách rõ ràng theo từng nhóm đối tượng sử dụng (Actor).
 
-### 1.0. Vòng đời một đợt đăng ký (Registration Lifecycle)
+### 1.0. Đợt đăng ký và vòng đời của nó (Registration Round & Lifecycle)
 
-Toàn bộ phần đăng ký đề tài vận hành theo **bốn pha của học kỳ**, và mọi quyền hành động ở các mục dưới đều được diễn giải theo pha hiện tại. Định nghĩa một lần ở đây để ba vai không mô tả lệch nhau.
+**Một đợt đăng ký là một cặp (học kỳ × loại đồ án)** — "đợt Đồ án Cơ sở HK1 2025-2026" — chứ không phải cả học kỳ. Kỳ nào khoa cũng mở nhiều loại cùng lúc: Cơ sở cho K47, Chuyên ngành cho K46, Tốt nghiệp cho K45. Ba nhóm sinh viên đó **không dùng chung một ghế nào**: một em K47 chưa có nhóm chỉ xếp được vào đề tài Cơ sở, còn ghế trống bên Tốt nghiệp không giúp gì cho em ấy — quy tắc eligibility ở FR_ADM_03 chặn cứng điều đó ở API.
 
-| Pha           | Sinh viên                                   | Giảng viên                                          | Giáo vụ (Admin)                           | Chuyển pha                                |
-| ------------- | ------------------------------------------- | --------------------------------------------------- | ----------------------------------------- | ----------------------------------------- |
-| `PREP`        | xem đề tài, **chưa đăng ký được**           | ra đề, sửa đề, công bố                              | khai eligibility, mở cổng                 | giáo vụ mở, hoặc tới `registration_start` |
-| `OPEN`        | tự đăng ký, rủ bạn, rời nhóm                | xem nhóm trên đề tài của mình                       | theo dõi tình hình lấp chỗ                | **tự động** khi quá `registration_end`    |
-| `RECONCILING` | **chỉ đọc** — không đăng ký, không rời nhóm | được thông báo khi có SV bị xếp vào đề tài của mình | **xếp SV chưa có nhóm, rồi chốt toàn bộ** | giáo vụ bấm **Chốt toàn bộ**              |
-| `FINALIZED`   | xem nhóm, đề tài, deadline                  | hướng dẫn, chấm điểm                                | mở khoá lại nếu cần (có ghi log)          | —                                         |
+Đây là lý do đợt phải là một thực thể có thật (`registration_rounds`) chứ không chỉ là một cách gọi: **mọi câu hỏi của phần đăng ký chỉ có nghĩa bên trong một đợt.** "Còn bao nhiêu ghế", "thiếu bao nhiêu chỗ", "xếp xong chưa", "chốt chưa" — hỏi ở mức học kỳ thì câu trả lời là tổng của những con số không cộng được với nhau. Cụ thể: K47 thiếu 30 chỗ Cơ sở trong khi Tốt nghiệp còn thừa 40 ghế, cộng lại ra "thừa 10". Con số đó đúng về số học và sai về mọi mặt còn lại, vì nó nói với giáo vụ rằng không cần mở thêm đề tài.
+
+**Đợt không phải một bước khai báo thêm cho giáo vụ.** Đợt sinh ra ngay khi khai eligibility: khai "kỳ này K46 làm Chuyên ngành" **chính là** tuyên bố có đợt Chuyên ngành trong kỳ này. Không có nút "tạo đợt" riêng — cùng lý do giao diện không có nút "tạo nhóm" riêng ở FR_STU_03: bước đó không phải một quyết định độc lập, nó là hệ quả của một quyết định vừa được ra.
+
+#### Năm pha
+
+Mọi quyền hành động ở các mục dưới đều được diễn giải theo pha **của đợt** đang xét. Định nghĩa một lần ở đây để ba vai không mô tả lệch nhau.
+
+| Pha           | Sinh viên                                                                                      | Giảng viên                                          | Giáo vụ (Admin)                             | Chuyển pha                                |
+| ------------- | ---------------------------------------------------------------------------------------------- | --------------------------------------------------- | ------------------------------------------- | ----------------------------------------- |
+| `PREP`        | xem đề tài, **chưa đăng ký được**                                                              | ra đề, sửa đề, công bố                              | khai đợt và eligibility, đặt ngày           | **tự động** khi tới `registration_start`  |
+| `OPEN`        | tự đăng ký, rủ bạn, rời nhóm                                                                   | xem nhóm trên đề tài của mình                       | theo dõi tình hình lấp chỗ                  | **tự động** khi quá `registration_end`    |
+| `RECONCILING` | **chỉ đọc** — không đăng ký, không rời nhóm                                                    | được thông báo khi có SV bị xếp vào đề tài của mình | **xếp SV chưa có nhóm**, gia hạn, hoặc chốt | giáo vụ bấm **Gia hạn** hoặc **Chốt đợt** |
+| `EXTENDED`    | **chưa có nhóm**: đăng ký / tham gia được. **đã có nhóm**: chỉ đọc — không rời, không giải tán | như `RECONCILING`                                   | **không xếp tay, không chốt** — chờ hết hạn | **tự động** khi quá hạn gia hạn           |
+| `FINALIZED`   | xem nhóm, đề tài, deadline                                                                     | hướng dẫn, chấm điểm                                | mở khoá lại nếu cần (có ghi log)            | —                                         |
+
+Không có nút "mở cổng" riêng. Muốn mở sớm thì **sửa `registration_start` về hôm nay** — ngày công bố là thứ sinh viên tin, nên một nút mở tay bên cạnh nó sẽ tạo ra cảnh cổng đã mở trong khi màn hình vẫn ghi ngày cũ. Một việc, một cách làm; đóng sớm cũng vậy, kéo `registration_end` về.
+
+Tập chuyển pha đầy đủ — mỗi pha đúng một đường vào, không có đường tắt:
+
+```
+PREP        → OPEN           (ngày: registration_start)
+OPEN        → RECONCILING    (ngày: registration_end)
+RECONCILING → EXTENDED       (giáo vụ bấm, bắt buộc kèm hạn mới + lý do, ghi log)
+EXTENDED    → RECONCILING    (ngày: hạn gia hạn)
+RECONCILING → FINALIZED      (giáo vụ bấm)
+FINALIZED   → RECONCILING    (giáo vụ bấm, ghi log)
+```
 
 **Việc xếp sinh viên thuộc về giáo vụ, không thuộc về giảng viên.** Không phải vì giảng viên không đủ hiểu đề tài, mà vì **không thầy nào nên có quyền kéo sinh viên vào đề tài của thầy khác** — mà một em chưa có nhóm thì gần như luôn phải xếp vào đề tài của người khác. Đây cũng đúng loại việc ADMIN đã làm ở FR_ADM_04: phân bổ nhóm vào hội đồng và chỉ định phản biện đều cắt ngang toàn khoa. Giao hai việc cùng hình dạng cho hai vai khác nhau là chỗ hệ thống bắt đầu khó giải thích. Vai ADMIN trong tài liệu này **là giáo vụ khoa**, không phải sysadmin — xem mục 1.3.
 
-Ba điểm thiết kế bắt buộc:
+#### `EXTENDED` — vì sao mở lại chỉ mở một nửa
 
-- **Pha là một cột trong `semesters`, không phải một phép so sánh ngày.** Nếu suy pha thuần từ `registration_end` thì pha `RECONCILING` không bao giờ kết thúc được: không có chỗ nào ghi nhận việc phân bổ đã xong. Ngày tháng là **mốc kích hoạt**, cột `phase` là **sự thật**.
-- **`OPEN → RECONCILING` tự động và kiểm lúc đọc** (lazy), không cần scheduler: truy vấn nào chạm vào học kỳ thì đẩy pha nếu đã quá hạn. Cùng cơ chế với việc hết hạn giữ chỗ ở FR_STU_03a.
-- **`RECONCILING → FINALIZED` là sự kiện có người bấm**, ghi lại ai bấm và lúc nào (`finalised_by_id`, `finalised_at`). Đây là thời điểm kết quả phân bổ trở thành chính thức.
+Pha `RECONCILING` khoá sinh viên vì **cho rời nhóm** thì kết quả phân bổ vừa dựng sẽ vỡ ngay sau lưng người dựng. Lý do đó nói về đường **ra**, không nói gì về đường **vào**: một em chưa có nhóm mà tự tìm được chỗ thì không phá hỏng kết quả nào — em ấy không nằm trong kết quả nào cả — và đó là một ca xếp tay giáo vụ không phải làm nữa. Vì vậy khi giáo vụ gia hạn, quyền mở lại là **bất đối xứng**: vào được, ra không được.
+
+Đây là pha duy nhất mà hai sinh viên trong cùng một đợt có quyền khác nhau tuỳ tình trạng nhóm, nên nó phải là **một pha** chứ không phải một cờ gắn thêm vào `RECONCILING`. Nếu là cờ thì mọi chỗ kiểm quyền phải nhớ kiểm hai thứ thay vì một, và câu từ chối hiện cho sinh viên không nói đúng được lý do nữa.
+
+Đường ra của `EXTENDED` là **ngày, không phải nút**: hết hạn gia hạn thì tự về `RECONCILING`. Gia hạn mà còn phải bấm lần nữa để đóng lại thì lại thêm một việc để quên.
+
+**Giáo vụ chỉ xếp tay khi cổng đã đóng**, tức ở pha `RECONCILING`, không phải ở `EXTENDED`. Cổng còn mở thì danh sách "chưa có nhóm" đổi ngay dưới tay người đang xếp: một em vừa được kéo vào đề tài thì cùng lúc có thể tự đăng ký chỗ khác, và ghế vừa nhắm cho em này thì em khác lấy mất trước khi thao tác kịp lưu. Chờ hết hạn gia hạn rồi mới xếp không mất gì — số em còn lại lúc đó ít hơn, và danh sách đứng yên trong suốt buổi làm việc.
+
+#### Ba điểm thiết kế bắt buộc
+
+- **Pha là một cột trong `registration_rounds`, không phải một phép so sánh ngày.** Nếu suy pha thuần từ `registration_end` thì pha `RECONCILING` không bao giờ kết thúc được: không có chỗ nào ghi nhận việc phân bổ đã xong. Ngày tháng là **mốc kích hoạt**, cột `phase` là **sự thật**.
+- **Các bước tự động được kiểm lúc đọc** (lazy), không cần scheduler: truy vấn nào chạm vào đợt thì đẩy pha nếu đã quá hạn. Áp dụng cho cả `PREP → OPEN`, `OPEN → RECONCILING` và `EXTENDED → RECONCILING`. Cùng cơ chế với việc hết hạn giữ chỗ ở FR_STU_03a.
+- **`RECONCILING → FINALIZED` là sự kiện có người bấm**, ghi lại ai bấm và lúc nào (`finalised_by_id`, `finalised_at`, trên chính đợt đó). Đây là thời điểm kết quả phân bổ của đợt trở thành chính thức. Hai đợt trong cùng một kỳ **chốt độc lập**: Tốt nghiệp xếp xong thì chốt Tốt nghiệp, không phải đợi Cơ sở.
+
+#### Cái gì vẫn ở mức học kỳ, và không được hạ xuống đợt
+
+Chia nhỏ tới đâu thì dừng cũng phải nói rõ, vì mấy quy tắc dưới đây trông rất giống loại nên đi theo đợt:
+
+- **"Mỗi sinh viên chỉ tham gia một nhóm mỗi HỌC KỲ"** — không phải mỗi đợt. Partial unique index vẫn là `(student_id, semester_id) WHERE status = 'ACCEPTED'` và **giữ nguyên**. Hạ xuống mức đợt thì một em thuộc khóa được mở hai loại đồ án sẽ ôm được hai đề tài cùng lúc.
+- Kéo theo: khai eligibility hai loại cho cùng một khóa nghĩa là **em ấy chọn một trong hai**, không phải làm cả hai. Đó là hai lựa chọn, không phải hai suất.
+- **Trọng số điểm** (`mentor_weight`, `reviewer_weight`, `council_weight`) và **deadline chốt điểm** (`grade_submission_deadline`) ở lại `semesters`: khoa chấm theo cùng một công thức cho cả kỳ, không phân biệt loại đồ án.
+- **Hội đồng bảo vệ** (FR_ADM_04) tổ chức theo học kỳ. Một hội đồng ngồi chấm nhiều loại đồ án trong cùng một buổi là chuyện bình thường.
 
 ### 1.1. Đối với Sinh viên (Student)
 
@@ -38,12 +79,12 @@ Ba điểm thiết kế bắt buộc:
   - Tra cứu, lọc, tìm kiếm các đề tài đang được mở theo học kỳ, loại đồ án (Cơ sở, Chuyên ngành, Tốt nghiệp) và **giảng viên hướng dẫn**.
   - Danh sách **mặc định lọc theo loại đồ án dành cho khóa của sinh viên** trong học kỳ đó (xem FR_ADM_03). Bộ lọc mặc định được hiển thị rõ và gỡ được — lọc ngầm mà không nói khiến người dùng tưởng hệ thống thiếu dữ liệu.
   - Xem chi tiết đề tài (Mô tả, yêu cầu, GV hướng dẫn, số chỗ còn trống).
-- **FR_STU_03 - Đăng ký đề tài** _(chỉ ở pha `OPEN`)_:
+- **FR_STU_03 - Đăng ký đề tài** _(pha `OPEN`; ở pha `EXTENDED` chỉ dành cho em chưa có nhóm)_:
   - Chọn đề tài và bấm **Đăng ký**. Hệ thống tự tạo nhóm trên chính đề tài đó và đặt người đăng ký làm trưởng nhóm — **đăng ký và tạo nhóm là một hành động**, giao diện không tách thành hai bước. Đăng ký một mình cũng là một nhóm (một người).
   - Đề tài **đã có nhóm nhưng còn ghế mở** thì sinh viên khác bấm **Tham gia** để vào thẳng nhóm đang có — không có bước mời, không có bước chờ chấp nhận. Xem FR_STU_03a.
   - Khi đăng ký, trưởng nhóm **có thể** khai số lượng dự kiến (2 hoặc 3 người). Khai thì các ghế còn lại được **giữ 24 giờ** và chỉ mở cho ai có **link tham gia**; không khai thì ghế mở tự do ngay.
   - Rời nhóm, hoặc giải tán nhóm nếu là trưởng nhóm — chỉ trong pha `OPEN`.
-  - **Mỗi học kỳ một sinh viên chỉ tham gia được một nhóm** — chặn ở tầng database bằng partial unique index, không phụ thuộc vào kiểm tra ở tầng ứng dụng.
+  - **Mỗi học kỳ một sinh viên chỉ tham gia được một nhóm** — chặn ở tầng database bằng partial unique index, không phụ thuộc vào kiểm tra ở tầng ứng dụng. Quy tắc này ở mức **học kỳ**, không phải mức đợt: khóa nào được mở hai loại đồ án trong cùng kỳ thì em ấy **chọn một trong hai** (mục 1.0).
   - **Chỉ sinh viên thuộc khóa được mở loại đồ án đó mới đăng ký được** (xem FR_ADM_03). Kiểm ở API, không chỉ ở giao diện.
 
 ##### FR_STU_03a - Cơ chế phân bổ: ai nhanh hơn người đó được
@@ -77,7 +118,7 @@ Mô hình hiện tại — **giành chỗ theo thứ tự đến, ở mức từ
   `hold_until` là **thời hạn**, không phải trạng thái — nó tự hết, không cần ai lật. Nhờ vậy mọi kiểu huỷ đều tự mở lại đề tài mà không cần dòng code nào nhớ làm việc đó.
 
 - Nhóm bị huỷ hoặc giải tán **không xoá cứng** — chuyển `REJECTED`. Trạng thái này nằm ngoài partial unique index nên đề tài tự động trở lại thị trường, đồng thời vẫn giữ được dấu vết ai từng rút.
-- **Không còn bước giảng viên duyệt từng nhóm.** Đủ người là xong. Việc rà soát diễn ra **một lần cho cả khoa** ở pha `RECONCILING` — xem FR_STU_03b và FR_LEC_03.
+- **Không còn bước giảng viên duyệt từng nhóm.** Đủ người là xong. Việc rà soát diễn ra **một lần cho cả đợt** ở pha `RECONCILING` — xem FR_STU_03b và FR_LEC_03.
 
 _(Các cơ chế phân bổ cạnh tranh — đăng ký nguyện vọng có thứ tự, đấu giá — là **tính năng riêng**, xem FR_ADM_03.)_
 
@@ -86,8 +127,9 @@ _(Các cơ chế phân bổ cạnh tranh — đăng ký nguyện vọng có th�
 Đăng ký tự do làm phần lớn sinh viên tự tìm được chỗ ngay trong pha `OPEN` — đây là lý do chính để chọn nó, vì mỗi em tự xử lý được là một em giảng viên không phải xếp tay. Nhưng không bao giờ hết sạch: có em quên đăng ký, có em bảo lưu, có em bị nhóm giải tán sát hạn. Khi sang pha `RECONCILING`:
 
 - Sinh viên **không tự đăng ký được nữa**, và cũng **không rời nhóm được**. Nếu còn cho rời thì kết quả phân bổ mà giảng viên vừa dựng sẽ vỡ ngay sau lưng họ.
+- **Còn nhiều em chưa có nhóm thì gia hạn trước, xếp tay sau.** Giáo vụ mở lại đợt ở pha `EXTENDED` (mục 1.0): em chưa có nhóm tự đăng ký tiếp được, em đã có nhóm không bị ảnh hưởng gì. Mỗi lần xếp tay là một lần **ghi đè lựa chọn của một sinh viên**, nên nó không nên là việc đầu tiên khoa làm ngay khi cổng vừa đóng — và một đợt gia hạn tốn của giáo vụ đúng một cú bấm, trong khi xếp tay tốn mỗi em một lượt.
 - Sinh viên chưa có nhóm **được giáo vụ xếp vào** một đề tài còn chỗ (FR_ADM_07). Vì em đó **không tự chọn** đề tài này, hệ thống bắt buộc gửi thông báo kèm lý do khi kết quả được chốt.
-- Nhóm chưa đủ sức chứa **vẫn hợp lệ**. Lệnh chốt toàn bộ ở cuối pha chấp nhận cả nhóm `2/3` — `max_students` là mức tối đa, không phải mức bắt buộc.
+- Nhóm chưa đủ sức chứa **vẫn hợp lệ**. Lệnh chốt đợt ở cuối pha chấp nhận cả nhóm `2/3` — `max_students` là mức tối đa, không phải mức bắt buộc.
 
 - **FR_STU_04 - Tự đề xuất đề tài:**
   - Nhập thông tin đề xuất đề tài mới (Tên, Mô tả, Mục tiêu).
@@ -122,23 +164,30 @@ Nhóm là đơn vị mà toàn bộ phần sau của hệ thống bám vào: bà
 - **FR_STU_GRP_06:** Xem trạng thái nhóm của bản thân và danh sách thành viên cùng nhóm (tên, mã SV, lớp, chuyên ngành, email).
 - **FR_STU_GRP_07:** Trưởng nhóm tắt/bật `open_for_join` để tuyên bố nhóm đã đủ hay còn nhận thêm.
 - **FR_STU_GRP_08:** Trưởng nhóm giải tán nhóm trong pha `OPEN`; nhóm chuyển `REJECTED` và đề tài trở lại thị trường ngay.
-- **FR_STU_GRP_09:** Từ pha `RECONCILING` trở đi, **toàn bộ** các thao tác trên bị khoá — chỉ giáo vụ còn thay đổi được thành phần nhóm (FR_ADM_07).
+- **FR_STU_GRP_09:** Từ pha `RECONCILING` trở đi, **toàn bộ** các thao tác trên bị khoá — chỉ giáo vụ còn thay đổi được thành phần nhóm (FR_ADM_07). Ngoại lệ duy nhất là pha `EXTENDED`: sinh viên **chưa có nhóm** vẫn đăng ký (GRP_01) hoặc tham gia (GRP_02) được, còn mọi đường **ra** — rời nhóm, giải tán, xoá thành viên — vẫn khoá như ở `RECONCILING`.
 
 Bốn trạng thái nhóm **đổi ý nghĩa** theo mô hình mới, nhưng enum giữ nguyên nên không cần migration:
 
-| Trạng thái  | Nghĩa mới                                                                                            |
-| ----------- | ---------------------------------------------------------------------------------------------------- |
-| `FORMING`   | còn ghế trống                                                                                        |
-| `SUBMITTED` | **tự động** khi đủ sức chứa: đủ người, chờ chốt. Không còn nút Submit nào cho sinh viên bấm.         |
-| `APPROVED`  | đã chốt ở cuối pha `RECONCILING` — kết quả của lệnh chốt toàn bộ, không phải của một lần duyệt riêng |
-| `REJECTED`  | nhóm tự giải tán hoặc bị huỷ                                                                         |
+| Trạng thái  | Nghĩa mới                                                                                        |
+| ----------- | ------------------------------------------------------------------------------------------------ |
+| `FORMING`   | còn ghế trống                                                                                    |
+| `SUBMITTED` | **tự động** khi đủ sức chứa: đủ người, chờ chốt. Không còn nút Submit nào cho sinh viên bấm.     |
+| `APPROVED`  | đã chốt ở cuối pha `RECONCILING` — kết quả của lệnh chốt đợt, không phải của một lần duyệt riêng |
+| `REJECTED`  | nhóm tự giải tán hoặc bị huỷ                                                                     |
 
-**Màn hình của sinh viên đổi theo pha, không phải một màn hình cố định:**
+**Pha nào áp dụng cho màn hình của em nào.** Pha nằm ở đợt, nên một sinh viên về nguyên tắc có thể đứng trước hai pha cùng lúc. Thực tế thì với gần hết sinh viên câu hỏi này không tồn tại: khóa của em chỉ được mở một loại đồ án trong kỳ, nên chỉ có một đợt và không có gì để chọn. Khi khoa mở hai loại cho cùng một khóa thì xử lý như sau:
 
-1. **`OPEN`, chưa có nhóm** — danh sách đề tài là nội dung chính, lọc mặc định theo khóa của em.
+- **Đã ở trong một nhóm** — màn hình bám theo pha của **đợt chứa nhóm đó**, không hỏi gì thêm. Em đã chọn rồi, và mỗi học kỳ chỉ vào được một nhóm (mục 1.0) nên không có đợt thứ hai nào còn nghĩa với em.
+- **Chưa ở nhóm nào, đủ điều kiện nhiều đợt** — hỏi **một lần** bằng một hàng chọn đợt ngay đầu màn hình (tab hoặc select), mặc định là đợt đang mở; hai đợt cùng mở thì mặc định đợt **đóng cổng sớm hơn**, vì đó là đợt em sắp lỡ. Không dựng thành một bước khai báo riêng trước khi vào màn hình — em đang muốn xem đề tài, không muốn điền form.
+- Chọn đợt là **chọn để xem**, không phải cam kết. Đổi qua lại thoải mái cho tới lúc bấm Đăng ký; chính cú bấm đó mới là chỗ em chọn thật.
+
+**Màn hình của sinh viên đổi theo pha của đợt đang xem, không phải một màn hình cố định:**
+
+1. **`OPEN`, chưa có nhóm** — danh sách đề tài là nội dung chính, giới hạn trong đợt đang xem và vì vậy đã lọc sẵn theo loại đồ án dành cho khóa của em.
 2. **`OPEN`, đã có nhóm** — đề tài và nhóm của mình lên đầu, kèm link tham gia nếu còn ghế đang giữ; danh sách đề tài lùi xuống nhưng **vẫn xem được**, vì em còn quyền rời nhóm để đổi.
 3. **`RECONCILING`** — chỉ đọc, và nói rõ tại sao: "Cổng đăng ký đã đóng, khoa đang rà soát phân bổ". Nếu em chưa có nhóm thì nói thẳng là đang chờ được xếp — im lặng ở đúng thời điểm này là lúc sinh viên hoảng nhất.
-4. **`FINALIZED`** — không còn danh sách đề tài; chỉ còn đề tài của mình, nhóm, GV hướng dẫn và các deadline sắp tới.
+4. **`EXTENDED`** — em **chưa có nhóm** thấy lại đúng màn hình ở trạng thái 1, kèm hạn mới và một dòng nói rõ đây là đợt gia hạn; em **đã có nhóm** thấy màn hình ở trạng thái 3, vì với em ấy thật sự không có gì thay đổi. Không bày danh sách đề tài cho em đã có nhóm — hiện ra mà bấm vào đâu cũng bị từ chối thì tệ hơn là không hiện.
+5. **`FINALIZED`** — không còn danh sách đề tài; chỉ còn đề tài của mình, nhóm, GV hướng dẫn và các deadline sắp tới.
 
 ### 1.2. Đối với Giảng viên (Lecturer)
 
@@ -147,6 +196,7 @@ Bốn trạng thái nhóm **đổi ý nghĩa** theo mô hình mới, nhưng enum
   - Cập nhật hồ sơ cá nhân: Chức danh, Số điện thoại (`phone`), Giới thiệu bản thân (`bio`), Hướng nghiên cứu (`research_interests`).
 - **FR_LEC_02 - Quản lý Đề tài do GV ra đề:**
   - Tạo đề tài mới, thiết lập số lượng sinh viên tối đa (`max_students` — sức chứa của nhóm sẽ làm đề tài), yêu cầu đầu ra.
+  - **Đề tài luôn thuộc về một đợt** — một cặp (học kỳ × loại đồ án) mà khoa đã mở, xem mục 1.0. Chọn loại đồ án lúc ra đề **chính là** chọn đợt, không có ô nhập nào thêm. Ra đề cho loại đồ án khoa chưa mở trong kỳ đó bị từ chối ngay tại chỗ, thay vì để đề tài nằm trong danh mục mà sinh viên nào bấm đăng ký cũng bị chặn vì không thuộc diện — lỗi kiểu đó khiến cả thầy lẫn trò đi tìm nguyên nhân ở nhầm chỗ.
   - Chỉnh sửa hoặc xóa đề tài (chỉ xóa được khi chưa có SV nào đăng ký).
   - Đóng/Mở cổng đăng ký của đề tài. Lưu ý phân biệt hai khái niệm: `TopicStatus.OPEN` nói về **cổng do giảng viên mở**, còn `is_full` nói về **ghế đã đủ người** — đề tài đang OPEN vẫn có thể đã đầy, và ngược lại.
 - **FR_LEC_03 - Nhóm đăng ký & Duyệt đề xuất:**
@@ -170,7 +220,7 @@ Bốn trạng thái nhóm **đổi ý nghĩa** theo mô hình mới, nhưng enum
 - **FR_LEC_GRP_02:** Chấm điểm hướng dẫn riêng cho từng thành viên (`mentor_grade` trong `registration_group_members`).
 - **FR_LEC_GRP_03:** Nhận thông báo khi giáo vụ xếp một sinh viên vào đề tài của mình ở pha `RECONCILING`, và thấy rõ trên màn hình nhóm rằng thành viên đó vào bằng đường xếp tay (`join_source = ASSIGNED`) chứ không tự đăng ký. Giảng viên **không phê duyệt** việc xếp này — xem FR_LEC_03.
 
-_Bàn phân bổ và lệnh chốt toàn bộ thuộc về giáo vụ, xem **FR_ADM_07**._
+_Bàn phân bổ và lệnh chốt đợt thuộc về giáo vụ, xem **FR_ADM_07**._
 
 ### 1.3. Đối với Quản trị viên (Admin / Giáo vụ Khoa)
 
@@ -186,23 +236,34 @@ _Bàn phân bổ và lệnh chốt toàn bộ thuộc về giáo vụ, xem **FR_
   - Quản lý Loại đồ án (`project_types`).
   - Quản lý Chuyên ngành (`majors`): Thêm, sửa, xóa các chuyên ngành. Danh sách phẳng, **không phân cấp theo bộ môn** — toàn hệ thống phục vụ đúng một khoa (vai trò Admin là Giáo vụ Khoa) và không có quy tắc nghiệp vụ nào phụ thuộc vào bộ môn: sinh viên đăng ký được đề tài của bất kỳ giảng viên nào, giảng viên nào cũng nhận hướng dẫn được.
 - **FR_ADM_03 - Quản lý Quy trình & Đợt đăng ký:**
-  - Thiết lập cửa sổ thời gian đăng ký đề tài theo học kỳ: `registration_start` và `registration_end` trong bảng `semesters`.
-  - Hệ thống tự động chuyển `OPEN → RECONCILING` khi quá `registration_end`, không cần Admin can thiệp thủ công. Bốn pha và ai được làm gì ở mỗi pha: xem mục **1.0**.
+  - **Mở đợt đăng ký cho từng loại đồ án trong học kỳ.** Một đợt là cặp (học kỳ × loại đồ án) — xem mục 1.0. Giáo vụ **không** tạo đợt bằng một nút riêng: khai khóa nào làm loại đồ án nào (bảng eligibility bên dưới) thì đợt tương ứng được tạo cùng lúc. Một việc khai, không phải hai.
+  - Thiết lập cửa sổ thời gian đăng ký **theo từng đợt**: `registration_start` và `registration_end` nằm trong `registration_rounds`, không nằm trong `semesters`. Đồ án Tốt nghiệp gần như luôn chạy lịch riêng với Cơ sở — chuẩn bị dài hơn, bảo vệ sớm hơn — và một cặp ngày dùng chung cho cả kỳ không diễn tả được điều đó. Khoa vẫn để các đợt trùng ngày nhau được nếu muốn; cái mất đi khi gộp chung là **khả năng tách**, không phải khả năng gộp.
+  - Hệ thống tự động chuyển `OPEN → RECONCILING` của **từng đợt** khi quá `registration_end` của chính đợt đó, không cần Admin can thiệp thủ công. Năm pha và ai được làm gì ở mỗi pha: xem mục **1.0**.
+  - **Sửa `registration_end` chỉ được khi đợt còn ở pha `PREP` hoặc `OPEN`.** Sau khi cổng đã đóng thì đó không còn là sửa lịch, mà là **mở lại cổng** — và việc đó phải đi qua lệnh Gia hạn. Cho sửa ngày lặng lẽ ở pha `RECONCILING` là lựa chọn tệ nhất trong ba đường: hoặc nó không có tác dụng gì mà người bấm vẫn tưởng đã gia hạn xong, hoặc nó mở lại cổng mà không ai biết ai mở và vì sao.
+  - **Gia hạn một đợt** (`RECONCILING → EXTENDED`): bắt buộc kèm **hạn mới** và **lý do**, có ghi log. Sinh viên chưa có nhóm đăng ký tiếp được, sinh viên đã có nhóm không rời được — xem mục 1.0. Hết hạn mới thì đợt tự về `RECONCILING`.
   - **Xếp sinh viên chưa có nhóm và chốt phân bổ** ở pha `RECONCILING` — xem FR_ADM_07.
-  - **Mở khoá học kỳ đã chốt** (`FINALIZED → RECONCILING`), có ghi log.
+  - **Mở khoá một đợt đã chốt** (`FINALIZED → RECONCILING`), có ghi log.
   - (Tùy chọn) Xét duyệt lần cuối các đề tài của giảng viên trước khi public cho SV.
   - **Khai báo khóa nào làm loại đồ án nào trong học kỳ.** Cùng một kỳ, khoa thường mở Đồ án Cơ sở cho K47, Chuyên ngành cho K46, Tốt nghiệp cho K45. Quy tắc này là **dữ liệu do giáo vụ khai**, không suy ra từ năm học của sinh viên — suy ra sẽ sai ngay với sinh viên học chậm, học vượt, bảo lưu hoặc học lại, mà nhóm đó không hề hiếm. Mô hình hoá đúng như thông báo khoa vẫn ra:
 
     ```
-    SemesterEligibility(semester_id, project_type_id, cohort)
-      UNIQUE(semester_id, project_type_id, cohort)
+    RegistrationRound(semester_id, project_type_id)     -- một đợt
+      UNIQUE(semester_id, project_type_id)
+      + registration_start, registration_end, phase,
+        extended_until, finalised_at, finalised_by_id, allocation_mode
+
+    RoundEligibility(round_id, cohort)
+      UNIQUE(round_id, cohort)
     ```
 
-    Bảng này chịu được cả trường hợp một khóa được mở hai loại đồ án trong cùng kỳ — chỉ là hai dòng. Nó phục vụ hai chiều: lọc mặc định danh sách đề tài cho sinh viên (FR_STU_02), và **chặn ở API** khi sinh viên nhận đề tài không thuộc diện của khóa mình (FR_STU_03).
+    Đợt đã biết loại đồ án, nên dòng eligibility chỉ còn khai **khóa** — bớt được một cột so với việc lặp lại `project_type_id` ở mỗi dòng. Mô hình chịu được cả trường hợp một khóa được mở hai loại đồ án trong cùng kỳ: chỉ là hai dòng ở hai đợt khác nhau, và em ấy **chọn một trong hai** vì mỗi học kỳ chỉ vào được một nhóm (mục 1.0). Nó phục vụ hai chiều: lọc mặc định danh sách đề tài cho sinh viên (FR_STU_02), và **chặn ở API** khi sinh viên nhận đề tài không thuộc diện của khóa mình (FR_STU_03).
 
-  - **Cơ chế phân bổ của học kỳ** — `semesters.allocation_mode`:
+  - **Cơ chế phân bổ của đợt** — `registration_rounds.allocation_mode`:
     - `FIRST_COME` _(mặc định, phạm vi hiện tại)_: ai nhận trước người đó được, theo FR_STU_03a.
     - `PREFERENCE_ROUND` _(v2, chưa triển khai)_: sinh viên nộp tối đa 3 nguyện vọng có thứ tự trong một cửa sổ; hết cửa sổ chạy một lượt phân bổ tập trung (thuật toán chấp nhận trì hoãn, ưu tiên theo điểm tích luỹ hoặc thời điểm nộp). Enum được đặt sẵn ngay từ đầu để sau này thêm chế độ là **mở rộng chứ không phải viết lại** phần đăng ký.
+
+    Cột này nằm ở đợt chứ không ở học kỳ vì nếu có ngày khoa đổi cơ chế, gần như chắc chắn khoa chạy thử trên **một** loại đồ án trước — thường là Tốt nghiệp — chứ không lật cả kỳ trong một lần.
+
 - **FR_ADM_04 - Quản lý Hội đồng bảo vệ (Councils):**
   - Tạo Hội đồng bảo vệ (Tên, ngày giờ, địa điểm).
   - Phân công Giảng viên vào hội đồng (Chủ tịch, Thư ký, Ủy viên...).
@@ -214,25 +275,29 @@ _Bàn phân bổ và lệnh chốt toàn bộ thuộc về giáo vụ, xem **FR_
   - **Tỷ lệ tự đăng ký so với xếp tay** mỗi học kỳ (đếm theo `join_source`) — thước đo trực tiếp xem cơ chế đăng ký tự do có đang làm đúng việc của nó hay không.
 - **FR_ADM_06 - Danh sách sinh viên toàn khoa:**
   - Một bảng duy nhất, có tìm kiếm / lọc / phân trang, các cột: **mã SV, họ tên, lớp, chuyên ngành, khóa, nhóm, đề tài, GV hướng dẫn, ghi chú**.
-  - Lọc theo: học kỳ, khóa, chuyên ngành, lớp, **tình trạng nhóm** (đã có / chưa có), giảng viên hướng dẫn.
+  - Lọc theo: học kỳ, **đợt** (tức loại đồ án), khóa, chuyên ngành, lớp, **tình trạng nhóm** (đã có / chưa có), giảng viên hướng dẫn.
   - `note` là ô ghi tay tự do của giáo vụ ("bảo lưu HK1", "đã gọi điện chưa phản hồi"). Mọi hệ thống hành chính thật đều cần một ô như vậy, vì thực tế luôn có ca mà schema không lường được — không có nó thì thông tin ấy chạy sang một file Excel riêng và biến mất khỏi hệ thống.
   - Xuất Excel.
-  - **Bàn phân bổ ở FR_ADM_07 dùng lại đúng bảng này**, chỉ khác bộ lọc mặc định (`nhóm = chưa có`) và tập hành động. Đây là **ràng buộc thiết kế, không phải gợi ý**: mỗi lần sinh thêm một "danh sách sinh viên" hơi khác là thêm một chỗ phải sửa khi đổi cột, và thêm một cơ hội để hai bảng báo hai con số khác nhau về cùng một việc.
+  - **Bàn phân bổ ở FR_ADM_07 dùng lại đúng bảng này**, chỉ khác ở chỗ nó bị ghim vào một đợt, bộ lọc mặc định là `nhóm = chưa có`, và tập hành động rộng hơn. Đây là **ràng buộc thiết kế, không phải gợi ý**: mỗi lần sinh thêm một "danh sách sinh viên" hơi khác là thêm một chỗ phải sửa khi đổi cột, và thêm một cơ hội để hai bảng báo hai con số khác nhau về cùng một việc.
 - **FR_ADM_07 - Bàn phân bổ & Chốt đợt đăng ký** _(pha `RECONCILING`)_:
-  - Một màn hình hai cột: **sinh viên chưa có nhóm** bên trái, **nhóm còn chỗ** bên phải. Bốn yêu cầu bắt buộc:
-    - **Hiện phép trừ ngay đầu màn hình, trước khi bắt đầu xếp:** `N sinh viên chưa có nhóm · M ghế trống · thiếu/thừa K`. Để giáo vụ kéo tay 90 lần rồi mới phát hiện cả khoa không đủ chỗ là thiết kế sai — thông tin quyết định phải đến **trước** công sức, không phải sau. Thiếu ghế thì đây là lúc mở thêm đề tài hoặc nâng `max_students`, không phải lúc xếp.
+  - **Bàn phân bổ luôn làm việc trong phạm vi một đợt.** Chọn đợt trước, rồi mới tới màn hình hai cột: **sinh viên chưa có nhóm** bên trái, **nhóm còn chỗ** bên phải. Không có chế độ "xem cả học kỳ" — trộn ba loại đồ án vào một màn hình sinh ra những con số không cộng được với nhau (mục 1.0), và biến gần như mọi thao tác kéo thành một thao tác phải kiểm lại xem có hợp lệ không.
+  - Bốn yêu cầu bắt buộc:
+    - **Hiện phép trừ ngay đầu màn hình, trước khi bắt đầu xếp:** `N sinh viên chưa có nhóm · M ghế trống · thiếu/thừa K`, **tính trong phạm vi đợt đang xem**. Để giáo vụ kéo tay 90 lần rồi mới phát hiện đợt này không đủ chỗ là thiết kế sai — thông tin quyết định phải đến **trước** công sức, không phải sau. Thiếu ghế thì đây là lúc mở thêm đề tài, nâng `max_students`, hoặc gia hạn để các em tự tìm chỗ — không phải lúc xếp.
     - **Phân loại lý do chưa có nhóm**, vì hai loại này xử lý khác nhau: _chưa từng đăng ký_ (có thể đã bảo lưu, có thể phải gọi điện) và _nhóm bị giải tán / bạn rút_ (đã cố gắng, nên được ưu tiên xếp trước). Gộp thành một danh sách phẳng là mất đúng thông tin quan trọng nhất.
     - **Gợi ý theo chuyên ngành khớp**, để giáo vụ không phải tự dò từng đề tài.
-    - **Tôn trọng eligibility khi xếp:** kéo một sinh viên vào loại đồ án không mở cho khóa của em thì bị chặn tại chỗ kèm lý do — không để lỗi này lọt tới lúc chốt mới phát hiện.
+    - **Tôn trọng eligibility khi xếp:** kéo một sinh viên vào loại đồ án không mở cho khóa của em thì bị chặn tại chỗ kèm lý do — không để lỗi này lọt tới lúc chốt mới phát hiện. Làm bàn phân bổ theo từng đợt đã loại bỏ phần lớn ca này từ đầu, nhưng luật vẫn phải kiểm ở API: một khóa không được mở loại đồ án của đợt đang xem thì em thuộc khóa đó không được xếp vào, dù em đang hiện trong danh sách chưa có nhóm của học kỳ.
+  - **Gia hạn thay vì xếp tay, khi số em chưa có nhóm còn lớn.** Xếp tay là công sức của giáo vụ nhân với số em, còn gia hạn là một cú bấm — và nó trả quyền chọn đề tài lại cho chính người sẽ phải làm đề tài đó. Xếp tay đúng chỗ của nó là **phần còn sót lại** sau khi đã cho các em một cơ hội tự chọn: những em không phản hồi, đã bảo lưu, hoặc thật sự không còn đề tài nào phù hợp.
+  - **Trong lúc gia hạn thì bàn phân bổ đóng.** Ở pha `EXTENDED` giáo vụ không xếp tay — xem mục 1.0. Bàn mở lại khi đợt tự về `RECONCILING`, và lúc đó danh sách bên trái đứng yên trong suốt buổi làm việc thay vì đổi sau lưng người đang kéo.
   - **Xếp sinh viên vào nhóm.** Thành viên được xếp tay mang dấu `join_source = ASSIGNED` cùng người xếp và thời điểm. Không có dấu này thì kỳ sau không trả lời được câu "vừa rồi phải xếp tay bao nhiêu em" — con số mà khoa sẽ hỏi mỗi năm, và cũng là thước đo xem cơ chế tự đăng ký có hiệu quả hay không (FR_ADM_05). Giảng viên chủ đề tài được thông báo (FR_LEC_GRP_03).
-  - **Nâng `max_students` của một đề tài** khi cả khoa thiếu ghế. Giảng viên chủ đề tài được thông báo — sức chứa là cam kết hướng dẫn của thầy, nên đổi mà không nói là đổi khối lượng công việc của người khác sau lưng họ.
-  - **Chốt toàn bộ** — hành động khối lớn và khó đảo, nên bắt buộc:
+  - **Nâng `max_students` của một đề tài** khi cả đợt thiếu ghế. Giảng viên chủ đề tài được thông báo — sức chứa là cam kết hướng dẫn của thầy, nên đổi mà không nói là đổi khối lượng công việc của người khác sau lưng họ.
+  - **Chốt đợt** — hành động khối lớn và khó đảo, nên bắt buộc:
+    - **Chốt theo từng đợt, không phải cả học kỳ một lần.** Đợt Tốt nghiệp xếp xong thì chốt được ngay, không phải đợi đợt Cơ sở — hai đợt không dùng chung ghế nào nên không có lý do gì để chúng chờ nhau. `finalised_at` / `finalised_by_id` nằm trên đợt.
     - **Xem trước rồi mới chốt:** hiện đúng những gì sẽ xảy ra — số nhóm, số sinh viên, số nhóm dưới sức chứa, số sinh viên còn chưa có nhóm.
     - **Chặn cứng khi còn sinh viên chưa xếp**, trừ khi bấm "bỏ qua các em này" kèm **lý do bắt buộc**. Lý do đó được lưu, vì nó chính là câu trả lời cho khiếu nại sau này.
     - **Chạy trong một transaction và idempotent:** bấm hai lần không tạo ra hai kết quả.
     - **Ghi `audit_logs`** cho cả lệnh chốt và từng lần xếp tay. Mỗi lần xếp là **ghi đè lựa chọn cá nhân của một sinh viên**; không lưu vết thì khoa không có gì để trả lời khi em đó hỏi "sao em lại vào đề tài này".
     - **Thông báo cho sinh viên bị xếp tay** (FR_SYS_01): em ấy không chọn đề tài này, nên phải được nói rõ đề tài nào, giảng viên nào và vì sao.
-  - **Mở khoá lại sau khi chốt** (`FINALIZED → RECONCILING`), có ghi log. Hệ thống nghiệp vụ thật không làm "không thể hoàn tác" — nó làm "hoàn tác được nhưng để lại dấu", vì chắc chắn sẽ có ca chốt xong mới phát hiện nhập sai.
+  - **Mở khoá lại sau khi chốt** (`FINALIZED → RECONCILING`, cho từng đợt), có ghi log. Hệ thống nghiệp vụ thật không làm "không thể hoàn tác" — nó làm "hoàn tác được nhưng để lại dấu", vì chắc chắn sẽ có ca chốt xong mới phát hiện nhập sai.
 
 ### 1.4. Yêu cầu Hệ thống (System Requirements)
 
@@ -242,9 +307,10 @@ _Bàn phân bổ và lệnh chốt toàn bộ thuộc về giáo vụ, xem **FR_
     - Đề xuất đề tài được duyệt / từ chối.
     - Có người tham gia nhóm của mình / bị xoá khỏi nhóm / nhóm bị giải tán.
     - **Cổng đăng ký sắp đóng mà mình chưa có nhóm.** Đây là thông báo có giá trị nhất trong cả hệ thống, vì nó là thông báo duy nhất còn kịp để sinh viên tự xử lý.
+    - **Đợt được gia hạn mà mình vẫn chưa có nhóm.** Cùng loại giá trị với thông báo trên và là lần cuối cùng còn kịp: sau hạn gia hạn thì em không còn tự chọn được nữa, chỉ còn được xếp.
     - **Được giáo vụ xếp vào nhóm** (pha `RECONCILING`) — bắt buộc, kèm đề tài, GV hướng dẫn và lý do. Sinh viên không tự chọn đề tài này nên không thể để em ấy tự phát hiện ra.
     - **Gửi cho giảng viên: có sinh viên được xếp vào đề tài của mình, hoặc `max_students` của đề tài mình bị nâng.** Cả hai đều là thay đổi trên đề tài của thầy do người khác quyết, nên phải được nói — dù thầy không có quyền phủ quyết (FR_LEC_03).
-    - **Kết quả phân bổ của học kỳ đã được chốt.**
+    - **Kết quả phân bổ của đợt đã được chốt.**
     - Báo cáo nộp có nhận xét mới từ GV.
     - Có điểm mới được nhập.
     - Sắp tới deadline nộp báo cáo hoặc deadline chốt điểm.
@@ -254,7 +320,7 @@ _Bàn phân bổ và lệnh chốt toàn bộ thuộc về giáo vụ, xem **FR_
 - **FR_SYS_03 - Audit Log (Ghi lịch sử thao tác):**
   - Mọi hành động nhạy cảm (Nhập/Sửa điểm, Xóa đề tài, Khóa tài khoản) của Admin và Giảng viên phải được ghi lại tự động vào bảng `audit_logs`.
   - Mỗi log ghi lại: Người thực hiện, Hành động, Bảng bị tác động, ID bản ghi, Giá trị cũ (JSON), Giá trị mới (JSON), Thời điểm.
-  - Phạm vi bắt buộc ghi log ở phần đăng ký: **xếp sinh viên vào nhóm**, **chốt toàn bộ**, **mở khoá học kỳ đã chốt**, và **trưởng nhóm xoá thành viên**.
+  - Phạm vi bắt buộc ghi log ở phần đăng ký: **xếp sinh viên vào nhóm**, **chốt đợt**, **gia hạn đợt** (kèm hạn mới và lý do), **mở khoá đợt đã chốt**, và **trưởng nhóm xoá thành viên**.
 
 ### 1.5. Ngoài phạm vi (đã cân nhắc và loại)
 

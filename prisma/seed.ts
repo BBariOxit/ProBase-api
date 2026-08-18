@@ -106,10 +106,6 @@ async function main() {
     month >= 7 ? new Date().getFullYear() : new Date().getFullYear() - 1;
   const semesterCode = `HK1-${academicYear}-${academicYear + 1}`;
 
-  // Phase is set explicitly, not left to its PREP default: the registration
-  // window below is deliberately open right now, and a semester sitting in PREP
-  // would refuse every registration while claiming to be open. The two have to
-  // agree, and only one of them can be the default.
   const semester = await prisma.semester.upsert({
     where: { code: semesterCode },
     create: {
@@ -117,45 +113,62 @@ async function main() {
       name: `Học kỳ 1 năm học ${academicYear}-${academicYear + 1}`,
       startDate: daysFromNow(-30),
       endDate: daysFromNow(120),
-      registrationStart: daysFromNow(-7),
-      registrationEnd: daysFromNow(21),
       gradeSubmissionDeadline: daysFromNow(110),
       isActive: true,
-      phase: 'OPEN',
     },
-    // Reseeding a semester that has already moved on would otherwise drag it
-    // back to OPEN and unlock allocation work someone had finished.
     update: { isActive: true },
   });
-  console.log(`  semester: ${semesterCode} (phase ${semester.phase})`);
+  console.log(`  semester: ${semesterCode}`);
 
-  // Which cohort does which kind of project this semester — the mapping the
-  // faculty announces. Cơ sở goes to the third-years, Chuyên ngành to the
-  // fourth, Tốt nghiệp to the fifth, counted back from the academic year so
-  // the fixture stays right whenever it is run. The demo student's code puts
-  // them in the Chuyên ngành cohort.
-  const ELIGIBILITY: { code: string; yearsBack: number }[] = [
-    { code: 'DACS', yearsBack: 3 },
-    { code: 'DACN', yearsBack: 4 },
-    { code: 'DATN', yearsBack: 5 },
+  // One round per kind of project, which is the announcement the faculty
+  // actually puts out: Cơ sở to the third-years, Chuyên ngành to the fourth,
+  // Tốt nghiệp to the fifth, counted back from the academic year so the fixture
+  // stays right whenever it is run. The demo student's code puts them in the
+  // Chuyên ngành cohort.
+  //
+  // Phase is set explicitly rather than left to its PREP default: the windows
+  // below are deliberately open right now, and a round sitting in PREP would
+  // refuse every registration while claiming to be open. The two have to agree,
+  // and only one of them can be the default.
+  const ROUNDS: { code: string; yearsBack: number; closesInDays: number }[] = [
+    { code: 'DACS', yearsBack: 3, closesInDays: 21 },
+    { code: 'DACN', yearsBack: 4, closesInDays: 21 },
+    // Deliberately on its own schedule. Final-year projects run to a different
+    // calendar in real faculties, and a fixture where all three rounds close on
+    // the same day would never exercise the reason rounds exist.
+    { code: 'DATN', yearsBack: 5, closesInDays: 14 },
   ];
 
-  await prisma.semesterEligibility.deleteMany({
-    where: { semesterId: semester.id },
-  });
-  for (const { code, yearsBack } of ELIGIBILITY) {
+  for (const { code, yearsBack, closesInDays } of ROUNDS) {
     const projectType = await prisma.projectType.findUniqueOrThrow({
       where: { code },
     });
-    await prisma.semesterEligibility.create({
-      data: {
+
+    const round = await prisma.registrationRound.upsert({
+      where: {
+        semesterId_projectTypeId: {
+          semesterId: semester.id,
+          projectTypeId: projectType.id,
+        },
+      },
+      create: {
         semesterId: semester.id,
         projectTypeId: projectType.id,
-        cohort: String(academicYear - yearsBack + 1),
+        registrationStart: daysFromNow(-7),
+        registrationEnd: daysFromNow(closesInDays),
+        phase: 'OPEN',
       },
+      // Reseeding a round that has already moved on would otherwise drag it back
+      // to OPEN and unlock allocation work someone had finished.
+      update: {},
+    });
+
+    await prisma.roundEligibility.deleteMany({ where: { roundId: round.id } });
+    await prisma.roundEligibility.create({
+      data: { roundId: round.id, cohort: String(academicYear - yearsBack + 1) },
     });
   }
-  console.log(`  eligibility: ${ELIGIBILITY.length} cohort/type rules`);
+  console.log(`  rounds: ${ROUNDS.length} (one per kind of project)`);
 
   const admin = await prisma.user.upsert({
     where: { email: ADMIN_EMAIL },

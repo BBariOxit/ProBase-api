@@ -15,7 +15,7 @@ export class ProjectTypesService {
     return this.prisma.projectType.findMany({
       orderBy: { name: 'asc' },
       include: {
-        _count: { select: { topics: true, topicProposals: true } },
+        _count: { select: { rounds: true, topicProposals: true } },
       },
     });
   }
@@ -24,7 +24,7 @@ export class ProjectTypesService {
     const projectType = await this.prisma.projectType.findUnique({
       where: { id },
       include: {
-        _count: { select: { topics: true, topicProposals: true } },
+        _count: { select: { rounds: true, topicProposals: true } },
       },
     });
 
@@ -57,17 +57,21 @@ export class ProjectTypesService {
   async remove(id: number) {
     const projectType = await this.prisma.projectType.findUnique({
       where: { id },
-      include: { _count: { select: { topics: true, topicProposals: true } } },
+      include: { _count: { select: { rounds: true, topicProposals: true } } },
     });
 
     if (!projectType) throw new NotFoundException('Project type not found');
 
+    // Counted through rounds rather than topics: a topic reaches its kind of
+    // project through the round it sits in, so a round is what stands between
+    // this row and the work built on it. Deleting one out from under a live
+    // round would take its topics with it.
     if (
-      projectType._count.topics > 0 ||
+      projectType._count.rounds > 0 ||
       projectType._count.topicProposals > 0
     ) {
       throw new ConflictException(
-        'Cannot delete project type with existing topics or proposals',
+        'Cannot delete project type with existing registration rounds or proposals',
       );
     }
 

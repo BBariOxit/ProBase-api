@@ -12,14 +12,18 @@ import {
 import { Role } from '../../generated/prisma/client';
 import { GetUser } from '../auth/decorators/get-user.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
+import { SetSemesterRoundsDto } from '../rounds/dto/set-semester-rounds.dto';
+import { RoundsService } from '../rounds/rounds.service';
 import { SemestersService } from './semesters.service';
 import { CreateSemesterDto } from './dto/create-semester.dto';
-import { SetEligibilityDto } from './dto/set-eligibility.dto';
 import { UpdateSemesterDto } from './dto/update-semester.dto';
 
 @Controller('semesters')
 export class SemestersController {
-  constructor(private readonly semestersService: SemestersService) {}
+  constructor(
+    private readonly semestersService: SemestersService,
+    private readonly roundsService: RoundsService,
+  ) {}
 
   @Get()
   findAll() {
@@ -58,21 +62,28 @@ export class SemestersController {
     return this.semestersService.activate(id);
   }
 
-  // ── Cohort eligibility ────────────────────────────────────
+  // ── Registration rounds ───────────────────────────────────
 
-  @Roles('ADMIN')
-  @Get(':id/eligibility')
-  findEligibility(@Param('id', ParseIntPipe) id: number) {
-    return this.semestersService.findEligibility(id);
+  @Get(':id/rounds')
+  findRounds(@Param('id', ParseIntPipe) id: number) {
+    return this.roundsService.findForSemester(id);
   }
 
+  /**
+   * The whole registration plan for a term, in one call: which kind of project
+   * is open, to which intakes, and between which dates.
+   *
+   * Declaring an intake is what creates a round, so there is no separate step
+   * that makes one — the same reason registering for a topic is what makes a
+   * group.
+   */
   @Roles('ADMIN')
-  @Put(':id/eligibility')
-  setEligibility(
+  @Put(':id/rounds')
+  setRounds(
     @Param('id', ParseIntPipe) id: number,
-    @Body() dto: SetEligibilityDto,
+    @Body() dto: SetSemesterRoundsDto,
   ) {
-    return this.semestersService.setEligibility(id, dto);
+    return this.roundsService.setSemesterRounds(id, dto);
   }
 
   /**
@@ -85,6 +96,6 @@ export class SemestersController {
     @GetUser('id') userId: number,
     @GetUser('role') role: Role,
   ) {
-    return this.semestersService.findEligibleProjectTypes(id, userId, role);
+    return this.roundsService.findEligibleProjectTypes(id, userId, role);
   }
 }
