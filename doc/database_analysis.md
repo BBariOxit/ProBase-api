@@ -25,8 +25,8 @@ Hệ thống quản lý đồ án cho sinh viên Công nghệ Thông tin (bao g�
 
 - **Quản lý hệ thống**: Quản lý tài khoản, cấp quyền.
 - **Quản lý danh mục**: Quản lý đợt/học kỳ, loại đồ án (Cơ sở, Chuyên ngành, Tốt nghiệp), chuyên ngành.
-- **Quản lý quy trình**: Mở/đóng đợt đăng ký theo bốn pha học kỳ, duyệt đề tài của giảng viên (nếu cần), phân công hội đồng bảo vệ.
-- **Phân bổ cuối đợt**: Sau khi cổng đóng, xếp sinh viên chưa có nhóm vào các đề tài còn chỗ rồi **chốt toàn bộ** học kỳ. Cùng loại việc với phân bổ nhóm vào hội đồng bảo vệ — đều cắt ngang toàn khoa, nên đều thuộc vai này.
+- **Quản lý quy trình**: Mở/đóng đợt đăng ký theo năm pha của **từng đợt** (một đợt = một cặp học kỳ × loại đồ án), gia hạn khi còn nhiều sinh viên chưa có nhóm, duyệt đề tài của giảng viên (nếu cần), phân công hội đồng bảo vệ.
+- **Phân bổ cuối đợt**: Sau khi cổng đóng, xếp sinh viên chưa có nhóm vào các đề tài còn chỗ rồi **chốt đợt** đó. Mỗi đợt chốt độc lập — Tốt nghiệp không phải đợi Cơ sở. Cùng loại việc với phân bổ nhóm vào hội đồng bảo vệ — đều cắt ngang toàn khoa, nên đều thuộc vai này.
 - **Danh sách sinh viên toàn khoa**: một bảng duy nhất (mã SV, tên, lớp, chuyên ngành, khóa, nhóm, đề tài, GV, ghi chú) — dùng chung cho cả bàn phân bổ.
 - **Báo cáo & Thống kê**: Thống kê số lượng sinh viên làm đồ án, tỉ lệ qua/trượt, danh sách điểm.
 
@@ -48,19 +48,25 @@ Hệ thống quản lý đồ án cho sinh viên Công nghệ Thông tin (bao g�
 
 ### Nhóm 2: Quản lý Danh mục (Master Data)
 
-- **`semesters`**: `id`, `name`, `code`, `start_date`, `end_date`, `registration_start` (Thời điểm mở đăng ký), `registration_end` (Thời điểm đóng đăng ký), `grade_submission_deadline` (Deadline chốt điểm — sau mốc này điểm bị khóa), `is_active`, `mentor_weight`, `reviewer_weight`, `council_weight` (Float — trọng số tính điểm tổng kết, mặc định 0.4/0.3/0.3, tổng bằng 1).
-  > _(cập nhật: thêm `registration_start`, `registration_end`; hỗ trợ FR_ADM_03)_
-  > _(cập nhật: thêm **`phase`** (PREP, OPEN, RECONCILING, FINALIZED), **`finalised_at`** và **`finalised_by_id`** (FK → `users`, Nullable) — hỗ trợ mục 1.0 và FR_ADM_07._
-  >
-  > _`phase` là **cột thật, không phải phép so sánh ngày**. Suy pha thuần từ `registration_end` thì pha `RECONCILING` không bao giờ kết thúc được: không có chỗ nào ghi nhận việc phân bổ đã xong. Ngày tháng là mốc kích hoạt, cột này là sự thật. `OPEN → RECONCILING` được đẩy **lúc đọc** (lazy) nên không cần scheduler; `RECONCILING → FINALIZED` bắt buộc là một sự kiện có người bấm, và `finalised_by_id` + `finalised_at` là dấu vết của nó._
+- **`semesters`**: `id`, `name`, `code`, `start_date`, `end_date`, `grade_submission_deadline` (Deadline chốt điểm — sau mốc này điểm bị khóa), `is_active`, `mentor_weight`, `reviewer_weight`, `council_weight` (Float — trọng số tính điểm tổng kết, mặc định 0.4/0.3/0.3, tổng bằng 1).
+  > _(cập nhật: **`registration_start`, `registration_end`, `phase`, `allocation_mode`, `finalised_at` và `finalised_by_id` đã chuyển xuống `registration_rounds`** — xem bảng đó và mục 1.0 của tài liệu FR. Học kỳ chỉ giữ lại những gì thật sự thuộc về cả kỳ: lịch học kỳ, deadline chốt điểm và ba trọng số điểm. Cửa sổ đăng ký và pha thì không: cùng một kỳ, Đồ án Tốt nghiệp và Đồ án Cơ sở là hai đợt riêng, mở và chốt độc lập nhau.)_
   >
   > _Không có cột `coordinator_id`, và **không có role thứ tư**: việc xếp sinh viên thuộc về vai **ADMIN (giáo vụ khoa)** đã có sẵn. Lý do là quyền hạn, không phải năng lực — một em chưa có nhóm gần như luôn phải xếp vào đề tài của thầy khác, nên không giảng viên nào nên có quyền đó. Đây cũng đúng loại việc ADMIN đã làm khi phân bổ nhóm vào hội đồng bảo vệ.)_
   > _(cập nhật: thêm 3 trọng số điểm — công thức tính điểm tổng kết là **dữ liệu theo học kỳ**, không hardcode trong code, để đổi trọng số kỳ sau không tính lại điểm các kỳ đã đóng)_
 - **`project_types`**: `id`, `name`, `code`.
-- **`semester_eligibilities`**: Khóa nào được làm loại đồ án nào trong học kỳ nào. _(bảng mới; hỗ trợ FR_ADM_03)_
-  - `id` (PK), `semester_id` (FK), `project_type_id` (FK), `cohort` (String — năm nhập học, `"2022"`).
-  - `UNIQUE(semester_id, project_type_id, cohort)`, cộng index `(semester_id, cohort)` cho câu hỏi nóng nhất: "kỳ này khóa này được làm những loại nào".
-  > _(Quy tắc này là **dữ liệu do giáo vụ khai**, không suy ra từ năm học của sinh viên — suy ra sẽ sai ngay với sinh viên học chậm, học vượt, bảo lưu hoặc học lại, mà nhóm đó không hề hiếm. Bảng chịu được cả trường hợp một khóa được mở hai loại đồ án trong cùng kỳ: chỉ là hai dòng. Nó phục vụ hai chiều — lọc mặc định danh sách đề tài cho sinh viên (FR_STU_02) và **chặn ở API** khi sinh viên đăng ký đề tài không thuộc diện của khóa mình (FR_STU_03), kể cả khi giáo vụ xếp tay ở pha `RECONCILING` (FR_ADM_07).)_
+- **`registration_rounds`**: Một **đợt đăng ký** = một cặp (học kỳ × loại đồ án). _(bảng mới; hỗ trợ mục 1.0 và FR_ADM_03)_
+  - `id` (PK), `semester_id` (FK), `project_type_id` (FK), `registration_start`, `registration_end`, `extended_until` (DateTime, Nullable — hạn của lần gia hạn đang chạy), `phase` (PREP, OPEN, RECONCILING, EXTENDED, FINALIZED), `allocation_mode` (FIRST_COME, PREFERENCE_ROUND), `finalised_at` (Nullable), `finalised_by_id` (FK → `users`, Nullable).
+  - `UNIQUE(semester_id, project_type_id)` — mỗi loại đồ án nhiều nhất một đợt trong một kỳ. Cộng `UNIQUE(id, semester_id)` để `topics` ghim được đợt và học kỳ bằng một khoá ngoại ghép, đúng thủ thuật `topics`/`registration_groups` đang dùng.
+  > _(Vì sao đợt chứ không phải học kỳ: Cơ sở, Chuyên ngành và Tốt nghiệp trong cùng một kỳ **không dùng chung ghế nào** — eligibility phân hoạch cả sinh viên lẫn đề tài theo loại. Hỏi "còn bao nhiêu ghế trống" ở mức học kỳ cho ra tổng của những con số không cộng được với nhau: thiếu 30 chỗ Cơ sở cộng thừa 40 ghế Tốt nghiệp ra "thừa 10", và bàn phân bổ ở FR_ADM_07 sẽ nói với giáo vụ rằng không cần mở thêm đề tài.)_
+  >
+  > _`phase` là **cột thật, không phải phép so sánh ngày**. Suy pha thuần từ `registration_end` thì pha `RECONCILING` không bao giờ kết thúc được: không có chỗ nào ghi nhận việc phân bổ đã xong. Ngày tháng là mốc kích hoạt, cột này là sự thật. `PREP → OPEN`, `OPEN → RECONCILING` và `EXTENDED → RECONCILING` được đẩy **lúc đọc** (lazy) nên không cần scheduler; `RECONCILING → FINALIZED` bắt buộc là một sự kiện có người bấm, và `finalised_by_id` + `finalised_at` là dấu vết của nó._
+  >
+  > _`EXTENDED` là pha gia hạn: sinh viên **chưa có nhóm** đăng ký tiếp được, sinh viên **đã có nhóm** không rời được. Bất đối xứng có chủ ý — cấm rời nhóm là để kết quả phân bổ không vỡ sau lưng người vừa dựng nó, mà một em chưa có nhóm thì không nằm trong kết quả nào cả._
+- **`round_eligibilities`**: Khóa nào được làm đợt nào. _(bảng mới, thay cho `semester_eligibilities`; hỗ trợ FR_ADM_03)_
+  - `id` (PK), `round_id` (FK), `cohort` (String — năm nhập học, `"2022"`).
+  - `UNIQUE(round_id, cohort)`, cộng index `(round_id)` cho câu hỏi nóng nhất: "kỳ này khóa này được làm những đợt nào".
+  > _(Đợt đã biết loại đồ án nên dòng này chỉ còn khai khóa — bớt một cột so với việc lặp `project_type_id` ở mỗi dòng. Khai eligibility cho một loại đồ án chưa có đợt trong kỳ thì **đợt được tạo cùng lúc**: giáo vụ khai một việc, không phải hai.)_
+  > _(Quy tắc này là **dữ liệu do giáo vụ khai**, không suy ra từ năm học của sinh viên — suy ra sẽ sai ngay với sinh viên học chậm, học vượt, bảo lưu hoặc học lại, mà nhóm đó không hề hiếm. Mô hình chịu được cả trường hợp một khóa được mở hai loại đồ án trong cùng kỳ: hai dòng ở hai đợt khác nhau. Nhưng đó là **hai lựa chọn, không phải hai suất** — partial unique index `(student_id, semester_id) WHERE status = 'ACCEPTED'` vẫn ở mức học kỳ, nên em ấy chỉ vào được một nhóm. Nó phục vụ hai chiều: lọc mặc định danh sách đề tài cho sinh viên (FR_STU_02) và **chặn ở API** khi sinh viên đăng ký đề tài không thuộc diện của khóa mình (FR_STU_03), kể cả khi giáo vụ xếp tay ở pha `RECONCILING` (FR_ADM_07).)_
 - **`majors`**: `id`, `name`, `code`. Danh sách chuyên ngành **phẳng**, không phân cấp. _(bảng mới: tách riêng Chuyên ngành; hỗ trợ FR_ADM_02)_
   > _(cập nhật: **đã bỏ hẳn bảng `departments`** (bộ môn). Nó từng gom giảng viên và chuyên ngành thành nhóm, nhưng không một quy tắc nghiệp vụ nào đọc tới: đăng ký đề tài, đề xuất và chấm điểm đều mở trong toàn khoa — chính tài liệu này ghi "GV nào trong khoa cũng có thể nhận". Người dùng duy nhất của nó là báo cáo "SV theo bộ môn", đã đưa ra khỏi phạm vi. Giữ lại chỉ tạo thêm một cấp phân cấp phải bảo trì mà không đổi lấy được luật ràng buộc nào.)_
 
@@ -84,7 +90,10 @@ Hệ thống quản lý đồ án cho sinh viên Công nghệ Thông tin (bao g�
 ### Nhóm 4: Quản lý Đề tài & Đăng ký (Topics & Registration)
 
 - **`topics`**: Danh sách đề tài chính thức (được GV đề xuất hoặc GV đã duyệt từ đề xuất của SV).
-  - `id` (PK), `title`, `description`, `expected_outcomes`, `project_type_id` (FK), `semester_id` (FK), `lecturer_id` (FK - GV Hướng dẫn), `max_students`, `status` (PENDING, APPROVED, OPEN, IN_PROGRESS, COMPLETED), `source_proposal_id` (FK - Nullable, liên kết ngược lại đề xuất gốc nếu có).
+  - `id` (PK), `title`, `description`, `expected_outcomes`, `round_id` (FK → `registration_rounds`), `semester_id` (FK), `lecturer_id` (FK - GV Hướng dẫn), `max_students`, `status` (PENDING, APPROVED, OPEN, IN_PROGRESS, COMPLETED), `source_proposal_id` (FK - Nullable, liên kết ngược lại đề xuất gốc nếu có).
+  > _(cập nhật: **`project_type_id` được thay bằng `round_id`.** Đợt đã mang loại đồ án, nên giữ cả hai là hai nguồn cho cùng một dữ kiện — đúng thứ tài liệu này từ chối ở chỗ mã lớp. Lọc đề tài theo loại đồ án đi qua `registration_rounds`, bảng chỉ vài dòng mỗi kỳ._
+  >
+  > _`semester_id` **vẫn giữ**, vì `registration_groups` đang ghim học kỳ của nó vào đề tài bằng khoá ngoại ghép. Để nó không lệch với học kỳ của đợt, khoá ngoại là `(round_id, semester_id)` → `registration_rounds(id, semester_id)`, cùng thủ thuật đang dùng giữa `registration_groups` và `topics`.)_
 - **`registration_groups`**: Nhóm đăng ký đề tài (thay thế hoàn toàn `topic_registrations`).
   - `id` (PK)
   - `topic_id` (FK) — Đề tài muốn đăng ký.
@@ -104,7 +113,7 @@ Hệ thống quản lý đồ án cho sinh viên Công nghệ Thông tin (bao g�
   >
   > _Quan trọng: cách này **không phá nguyên tắc "không lưu is_full"**. `hold_until` là một **thời hạn**, không phải trạng thái — nó tự hết, không cần đường huỷ nào nhớ lật lại. Độ mở vẫn tính lúc đọc: `người_lạ_vào_được = open_for_join ∧ now() > hold_until ∧ số_thành_viên < max_students`. Thành viên rời nhóm, nhóm giải tán, admin khoá tài khoản — mọi đường đều tự mở lại đề tài._
   >
-  > _Bốn trạng thái đổi ý nghĩa nhưng **enum giữ nguyên, không cần migration**: `FORMING` = còn ghế trống; `SUBMITTED` = **tự động** khi đủ sức chứa, không còn nút Submit cho sinh viên bấm; `APPROVED` = kết quả của lệnh **chốt toàn bộ** ở cuối pha `RECONCILING`, không phải của một lần duyệt riêng; `REJECTED` = tự giải tán hoặc bị huỷ._
+  > _Bốn trạng thái đổi ý nghĩa nhưng **enum giữ nguyên, không cần migration**: `FORMING` = còn ghế trống; `SUBMITTED` = **tự động** khi đủ sức chứa, không còn nút Submit cho sinh viên bấm; `APPROVED` = kết quả của lệnh **chốt đợt** ở cuối pha `RECONCILING`, không phải của một lần duyệt riêng; `REJECTED` = tự giải tán hoặc bị huỷ._
   >
   > _**Nhóm chuyển `REJECTED` phải hạ toàn bộ thành viên trong cùng transaction.** Hai partial unique index không biết nhau: index trên thành viên chỉ nhìn `status = 'ACCEPTED'`, không nhìn nhóm còn sống hay đã chết. Bỏ qua bước này thì đề tài về lại thị trường nhưng cả nhóm cũ không ai đăng ký lại được — một bug âm thầm và rất khó lần ra.)_
 - **`registration_group_members`**: Thành viên của nhóm đăng ký.
@@ -179,12 +188,13 @@ erDiagram
     MAJOR ||--o{ STUDENT_PROFILE : "belongs to"
 
     %% Categories
-    SEMESTER ||--o{ SEMESTER_ELIGIBILITY : "declares cohort rules"
-    PROJECT_TYPE ||--o{ SEMESTER_ELIGIBILITY : "opened for cohort"
+    SEMESTER ||--o{ REGISTRATION_ROUND : "opens rounds"
+    PROJECT_TYPE ||--o{ REGISTRATION_ROUND : "typed as"
+    REGISTRATION_ROUND ||--o{ ROUND_ELIGIBILITY : "declares cohort rules"
+    REGISTRATION_ROUND ||--o{ TOPIC : "contains"
     SEMESTER ||--o{ TOPIC : "contains"
     SEMESTER ||--o{ TOPIC_PROPOSAL : "contains"
     SEMESTER ||--o{ COUNCIL : "has"
-    PROJECT_TYPE ||--o{ TOPIC : "categorizes"
     PROJECT_TYPE ||--o{ TOPIC_PROPOSAL : "categorizes"
 
     %% Proposals (Student proposes topic)
@@ -242,24 +252,29 @@ erDiagram
     SEMESTER {
         int id PK
         string name
-        string phase "PREP, OPEN, RECONCILING, FINALIZED"
-        string allocation_mode "FIRST_COME, PREFERENCE_ROUND"
-        date registration_start
-        date registration_end
         date grade_submission_deadline
         date start_date
         date end_date
-        date finalised_at
-        int finalised_by_id FK
         float mentor_weight
         float reviewer_weight
         float council_weight
     }
-    SEMESTER_ELIGIBILITY {
+    REGISTRATION_ROUND {
         int id PK
         int semester_id FK
         int project_type_id FK
-        string cohort "năm nhập học, unique cùng semester+type"
+        string phase "PREP, OPEN, RECONCILING, EXTENDED, FINALIZED"
+        string allocation_mode "FIRST_COME, PREFERENCE_ROUND"
+        date registration_start
+        date registration_end
+        date extended_until
+        date finalised_at
+        int finalised_by_id FK
+    }
+    ROUND_ELIGIBILITY {
+        int id PK
+        int round_id FK
+        string cohort "năm nhập học, unique cùng round"
     }
     TOPIC_PROPOSAL {
         int id PK
@@ -271,6 +286,7 @@ erDiagram
     }
     TOPIC {
         int id PK
+        int round_id FK
         int source_proposal_id FK
         int lecturer_id FK
         string status
