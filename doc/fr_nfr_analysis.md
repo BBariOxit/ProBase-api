@@ -22,11 +22,13 @@ Mọi quyền hành động ở các mục dưới đều được diễn giải
 
 | Pha           | Sinh viên                                                                                      | Giảng viên                                          | Giáo vụ (Admin)                             | Chuyển pha                                |
 | ------------- | ---------------------------------------------------------------------------------------------- | --------------------------------------------------- | ------------------------------------------- | ----------------------------------------- |
-| `PREP`        | xem đề tài, **chưa đăng ký được**                                                              | ra đề, sửa đề, công bố                              | khai eligibility, mở cổng                   | giáo vụ mở, hoặc tới `registration_start` |
+| `PREP`        | xem đề tài, **chưa đăng ký được**                                                              | ra đề, sửa đề, công bố                              | khai đợt và eligibility, đặt ngày           | **tự động** khi tới `registration_start`  |
 | `OPEN`        | tự đăng ký, rủ bạn, rời nhóm                                                                   | xem nhóm trên đề tài của mình                       | theo dõi tình hình lấp chỗ                  | **tự động** khi quá `registration_end`    |
 | `RECONCILING` | **chỉ đọc** — không đăng ký, không rời nhóm                                                    | được thông báo khi có SV bị xếp vào đề tài của mình | **xếp SV chưa có nhóm**, gia hạn, hoặc chốt | giáo vụ bấm **Gia hạn** hoặc **Chốt đợt** |
 | `EXTENDED`    | **chưa có nhóm**: đăng ký / tham gia được. **đã có nhóm**: chỉ đọc — không rời, không giải tán | như `RECONCILING`                                   | **không xếp tay, không chốt** — chờ hết hạn | **tự động** khi quá hạn gia hạn           |
 | `FINALIZED`   | xem nhóm, đề tài, deadline                                                                     | hướng dẫn, chấm điểm                                | mở khoá lại nếu cần (có ghi log)            | —                                         |
+
+Không có nút "mở cổng" riêng. Muốn mở sớm thì **sửa `registration_start` về hôm nay** — ngày công bố là thứ sinh viên tin, nên một nút mở tay bên cạnh nó sẽ tạo ra cảnh cổng đã mở trong khi màn hình vẫn ghi ngày cũ. Một việc, một cách làm; đóng sớm cũng vậy, kéo `registration_end` về.
 
 Tập chuyển pha đầy đủ — mỗi pha đúng một đường vào, không có đường tắt:
 
@@ -173,9 +175,15 @@ Bốn trạng thái nhóm **đổi ý nghĩa** theo mô hình mới, nhưng enum
 | `APPROVED`  | đã chốt ở cuối pha `RECONCILING` — kết quả của lệnh chốt đợt, không phải của một lần duyệt riêng |
 | `REJECTED`  | nhóm tự giải tán hoặc bị huỷ                                                                     |
 
-**Màn hình của sinh viên đổi theo pha, không phải một màn hình cố định:**
+**Pha nào áp dụng cho màn hình của em nào.** Pha nằm ở đợt, nên một sinh viên về nguyên tắc có thể đứng trước hai pha cùng lúc. Thực tế thì với gần hết sinh viên câu hỏi này không tồn tại: khóa của em chỉ được mở một loại đồ án trong kỳ, nên chỉ có một đợt và không có gì để chọn. Khi khoa mở hai loại cho cùng một khóa thì xử lý như sau:
 
-1. **`OPEN`, chưa có nhóm** — danh sách đề tài là nội dung chính, lọc mặc định theo khóa của em.
+- **Đã ở trong một nhóm** — màn hình bám theo pha của **đợt chứa nhóm đó**, không hỏi gì thêm. Em đã chọn rồi, và mỗi học kỳ chỉ vào được một nhóm (mục 1.0) nên không có đợt thứ hai nào còn nghĩa với em.
+- **Chưa ở nhóm nào, đủ điều kiện nhiều đợt** — hỏi **một lần** bằng một hàng chọn đợt ngay đầu màn hình (tab hoặc select), mặc định là đợt đang mở; hai đợt cùng mở thì mặc định đợt **đóng cổng sớm hơn**, vì đó là đợt em sắp lỡ. Không dựng thành một bước khai báo riêng trước khi vào màn hình — em đang muốn xem đề tài, không muốn điền form.
+- Chọn đợt là **chọn để xem**, không phải cam kết. Đổi qua lại thoải mái cho tới lúc bấm Đăng ký; chính cú bấm đó mới là chỗ em chọn thật.
+
+**Màn hình của sinh viên đổi theo pha của đợt đang xem, không phải một màn hình cố định:**
+
+1. **`OPEN`, chưa có nhóm** — danh sách đề tài là nội dung chính, giới hạn trong đợt đang xem và vì vậy đã lọc sẵn theo loại đồ án dành cho khóa của em.
 2. **`OPEN`, đã có nhóm** — đề tài và nhóm của mình lên đầu, kèm link tham gia nếu còn ghế đang giữ; danh sách đề tài lùi xuống nhưng **vẫn xem được**, vì em còn quyền rời nhóm để đổi.
 3. **`RECONCILING`** — chỉ đọc, và nói rõ tại sao: "Cổng đăng ký đã đóng, khoa đang rà soát phân bổ". Nếu em chưa có nhóm thì nói thẳng là đang chờ được xếp — im lặng ở đúng thời điểm này là lúc sinh viên hoảng nhất.
 4. **`EXTENDED`** — em **chưa có nhóm** thấy lại đúng màn hình ở trạng thái 1, kèm hạn mới và một dòng nói rõ đây là đợt gia hạn; em **đã có nhóm** thấy màn hình ở trạng thái 3, vì với em ấy thật sự không có gì thay đổi. Không bày danh sách đề tài cho em đã có nhóm — hiện ra mà bấm vào đâu cũng bị từ chối thì tệ hơn là không hiện.
