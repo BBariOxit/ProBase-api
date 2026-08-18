@@ -173,6 +173,17 @@ function withActiveGroup<T extends TopicWithGroups>(
    */
   const eligibleForMe = viewer?.eligible ?? null;
 
+  /**
+   * Whether this reader already holds a place this semester, or null when the
+   * question does not apply to them.
+   *
+   * Sent because it is the other reason `canRegister` can be false while a topic
+   * sits there plainly unclaimed. Without it a screen can only grey the button
+   * out and say nothing, and the student reads that as the system being broken
+   * rather than as them already having what the button offers.
+   */
+  const alreadyInAGroup = viewer?.hasGroup ?? null;
+
   if (!group) {
     return {
       ...rest,
@@ -184,6 +195,7 @@ function withActiveGroup<T extends TopicWithGroups>(
       canRegister: allowed,
       canJoin: false,
       eligibleForMe,
+      alreadyInAGroup,
     };
   }
 
@@ -222,6 +234,7 @@ function withActiveGroup<T extends TopicWithGroups>(
       group.openForJoin &&
       topic.maxStudents - occupied - held > 0,
     eligibleForMe,
+    alreadyInAGroup,
   };
 }
 

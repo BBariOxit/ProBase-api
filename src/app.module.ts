@@ -7,6 +7,7 @@ import { AppService } from './app.service';
 import { AuthModule } from './auth/auth.module';
 import { MailModule } from './mail/mail.module';
 import { MajorsModule } from './majors/majors.module';
+import { NotificationsModule } from './notifications/notifications.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { ProjectTypesModule } from './project-types/project-types.module';
 import { RegistrationModule } from './registration/registration.module';
@@ -40,6 +41,7 @@ import { UsersModule } from './users/users.module';
     PrismaModule,
     AuthModule,
     MajorsModule,
+    NotificationsModule,
     RoundsModule,
     SemestersModule,
     ProjectTypesModule,

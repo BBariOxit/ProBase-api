@@ -9,6 +9,7 @@ import {
 import {
   GroupJoinSource,
   GroupMemberStatus,
+  NotificationType,
   Prisma,
   RegistrationGroupStatus,
   Role,
@@ -18,6 +19,7 @@ import {
   isUniqueViolation,
   uniqueConstraintName,
 } from '../common/prisma-error.util';
+import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { RoundPhaseService } from '../rounds/round-phase.service';
 import { QueryMyGroupDto } from './dto/query-my-group.dto';
@@ -85,7 +87,10 @@ const GROUP_SELECT = {
           class: true,
           cohort: true,
           major: { select: { id: true, name: true, code: true } },
-          user: { select: { email: true } },
+          // The account id is here to address notices to; `render` drops the
+          // whole `user` object and re-exposes only the address, so it never
+          // reaches a response.
+          user: { select: { id: true, email: true } },
         },
       },
     },
@@ -153,6 +158,7 @@ export class RegistrationGroupsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly phases: RoundPhaseService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   // ── register ──────────────────────────────────────────────
@@ -250,7 +256,7 @@ export class RegistrationGroupsService {
 
     await this.assertJoinable(group, student, { allowHeldSeats: false });
 
-    return this.addMember(group.id, student.id, GroupJoinSource.SELF, {
+    return this.addMember(group.id, student, GroupJoinSource.SELF, {
       allowHeldSeats: false,
     });
   }
@@ -262,7 +268,7 @@ export class RegistrationGroupsService {
 
     await this.assertJoinable(group, student, { allowHeldSeats: true });
 
-    return this.addMember(group.id, student.id, GroupJoinSource.LINK, {
+    return this.addMember(group.id, student, GroupJoinSource.LINK, {
       allowHeldSeats: true,
     });
   }
@@ -471,6 +477,19 @@ export class RegistrationGroupsService {
       });
     });
 
+    // The one thing here a student did not do to themselves, and the only way
+    // they would otherwise learn of it is by finding themselves back on the
+    // topic list with no explanation.
+    await this.notifications.notify([
+      {
+        userId: member.student.user.id,
+        type: NotificationType.GROUP_MEMBER_REMOVED,
+        title: 'Bạn đã bị đưa ra khỏi nhóm',
+        content: `Trưởng nhóm đã đưa bạn ra khỏi nhóm đề tài "${group.topic.title}". Nếu cổng đăng ký còn mở, bạn có thể chọn một đề tài khác.`,
+        targetId: group.topicId,
+      },
+    ]);
+
     return this.present(id, { studentId: student.id });
   }
 
@@ -513,6 +532,20 @@ export class RegistrationGroupsService {
         data: { status: RegistrationGroupStatus.REJECTED },
       }),
     ]);
+
+    // Everybody except whoever pressed it — they were there, and a notice about
+    // one's own action is noise that teaches people to stop reading them.
+    await this.notifications.notify(
+      group.members
+        .filter((member) => member.student.user.id !== userId)
+        .map((member) => ({
+          userId: member.student.user.id,
+          type: NotificationType.GROUP_DISBANDED,
+          title: 'Nhóm của bạn đã giải tán',
+          content: `Nhóm đề tài "${group.topic.title}" đã giải tán và đề tài trở lại danh sách. Nếu cổng đăng ký còn mở, bạn có thể chọn một đề tài khác.`,
+          targetId: group.topicId,
+        })),
+    );
 
     return { message: 'Group disbanded and the topic is available again' };
   }
@@ -582,12 +615,14 @@ export class RegistrationGroupsService {
    */
   private async addMember(
     groupId: number,
-    studentId: number,
+    student: { id: number; fullName: string },
     joinSource: GroupJoinSource,
     options: { allowHeldSeats: boolean },
   ) {
-    try {
-      await this.prisma.$transaction(async (tx) => {
+    const studentId = student.id;
+
+    const audience = await this.prisma
+      .$transaction(async (tx) => {
         await tx.$queryRaw`SELECT 1 FROM "registration_groups" WHERE "id" = ${groupId} FOR UPDATE`;
 
         // Re-read inside the lock: the counts checked before it was taken are
@@ -635,10 +670,27 @@ export class RegistrationGroupsService {
         });
 
         await this.syncStatus(tx, groupId, seats.capacity);
+
+        // Gathered while the row is still locked, so the list is exactly who was
+        // in the group at the moment this student joined it.
+        return {
+          userIds: group.members.map((member) => member.student.user.id),
+          topicTitle: group.topic.title,
+        };
+      })
+      .catch((err: unknown) => {
+        throw this.translateRegistrationConflict(err);
       });
-    } catch (err) {
-      throw this.translateRegistrationConflict(err);
-    }
+
+    await this.notifications.notify(
+      audience.userIds.map((userId) => ({
+        userId,
+        type: NotificationType.GROUP_MEMBER_JOINED,
+        title: 'Có người tham gia nhóm của bạn',
+        content: `${student.fullName} vừa vào nhóm đề tài "${audience.topicTitle}".`,
+        targetId: groupId,
+      })),
+    );
 
     return this.present(groupId, { studentId });
   }
@@ -846,7 +898,7 @@ export class RegistrationGroupsService {
   private async requireStudent(userId: number) {
     const profile = await this.prisma.studentProfile.findUnique({
       where: { userId },
-      select: { id: true, cohort: true },
+      select: { id: true, cohort: true, fullName: true },
     });
 
     if (!profile) {
