@@ -140,6 +140,31 @@ function seatBreakdown(group: GroupRow) {
 }
 
 /**
+ * A topic that grew out of a student's proposal belongs to that student.
+ *
+ * Without this, accepting a proposal publishes the idea to everybody: a freshly
+ * approved topic is the newest unclaimed row on the browse screen, which is
+ * exactly what students are looking for, and the person who thought of it can
+ * lose it to somebody who read it thirty seconds ago.
+ *
+ * It needs no expiry of its own. Self-registration is only possible while the
+ * round is OPEN or EXTENDED, so the reservation lapses the moment the gate
+ * shuts — and from RECONCILING the faculty office may place anyone here, which
+ * is the point at which an unclaimed topic should be fair game.
+ */
+function requireProposerOrFree(
+  topic: { sourceProposal: { studentId: number } | null },
+  studentId: number,
+): void {
+  if (!topic.sourceProposal) return;
+  if (topic.sourceProposal.studentId === studentId) return;
+
+  throw new ConflictException(
+    'Đề tài này do một sinh viên khác đề xuất, nên chỉ bạn ấy đăng ký được.',
+  );
+}
+
+/**
  * A group filling up is what used to be a leader pressing Submit. Nobody presses
  * anything now, so the status follows the seat count — and follows it back down
  * when a member leaves, since a group that is no longer full is forming again.
@@ -176,6 +201,7 @@ export class RegistrationGroupsService {
 
     await this.phases.requireCanJoin(topic.roundId, student.id);
     await this.requireEligible(topic, student.cohort);
+    requireProposerOrFree(topic, student.id);
     await this.requireNoExistingGroup(student.id, topic.semesterId);
 
     if (dto.declaredSize && dto.declaredSize > topic.maxStudents) {
@@ -923,6 +949,8 @@ export class RegistrationGroupsService {
         maxStudents: true,
         status: true,
         round: { select: { projectType: { select: { name: true } } } },
+        // Who, if anyone, this topic was written for. See requireProposerOrFree.
+        sourceProposal: { select: { studentId: true } },
       },
     });
 

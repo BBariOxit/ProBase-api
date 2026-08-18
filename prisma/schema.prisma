@@ -132,6 +132,12 @@ enum CouncilMemberRole {
 /// raise them any more, and leaving them would leave the enum documenting a
 /// system that no longer exists.
 enum NotificationType {
+  /// A student sent this lecturer a topic proposal and is waiting on an answer.
+  /// The only notice in this list addressed to staff, and the reason it exists:
+  /// an inbox nobody is told about is an inbox nobody opens, and the person kept
+  /// waiting by that is a student who cannot register in the meantime.
+  PROPOSAL_SUBMITTED
+
   PROPOSAL_ACCEPTED
   PROPOSAL_REJECTED
 
