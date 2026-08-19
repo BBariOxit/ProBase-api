@@ -250,6 +250,7 @@ model StudentProfile {
   groupsLed        RegistrationGroup[]
   groupMemberships RegistrationGroupMember[]
   councilGrades    CouncilTopicGrade[]
+  submissions      Submission[]              @relation("SubmissionAuthor")
 
   @@map("student_profiles")
 }
@@ -608,25 +609,49 @@ model RegistrationGroupMember {
 // ─────────────────────────────────────────────────────────
 
 model Submission {
-  id               Int            @id @default(autoincrement())
-  topicId          Int
-  groupId          Int
-  submissionType   SubmissionType
-  fileUrl          String? // Cloud storage path (S3, GCS, etc.)
-  submissionUrl    String? // External link (GitHub, Google Drive, etc.)
-  fileName         String?
-  fileSize         Int? // Bytes
-  version          Int            @default(1) // Incremented on each re-submission
-  lecturerFeedback String?        @db.Text
-  submittedAt      DateTime       @default(now())
+  id             Int            @id @default(autoincrement())
+  topicId        Int
+  groupId        Int
+  submissionType SubmissionType
+
+  /// Where the uploaded file lives, and the handle needed to delete it. Both or
+  /// neither: a URL with no handle is a file nothing can ever clean up.
+  fileUrl      String?
+  filePublicId String?
+  /// The name the student's own file had, kept for display only. Never used to
+  /// build a path — it is text the uploader chose.
+  fileName String?
+  fileSize Int? // Bytes
+
+  /// An external link instead of, or alongside, a file — a repository, a drive
+  /// folder. Source code is nearly always this rather than an upload.
+  submissionUrl String?
+
+  version Int @default(1) // Incremented on each re-submission
+
+  /// Who handed it in. A group submits, but a person presses the button, and
+  /// "who sent this version" is the first question asked when two of them
+  /// disagree about what was submitted.
+  submittedById Int?
+
+  lecturerFeedback String?   @db.Text
+  /// When the supervisor answered. Null while nobody has — which is what the
+  /// student's screen reads to say whether anyone has looked at it yet.
+  feedbackAt       DateTime?
+
+  submittedAt DateTime @default(now())
 
   // Two constraints on purpose: `topic` keeps direct navigation and querying,
   // while the composite `group` key pins topicId to the group's own topic so
   // the denormalised column cannot drift away from it.
-  topic Topic             @relation(fields: [topicId], references: [id], onDelete: Restrict)
-  group RegistrationGroup @relation(fields: [groupId, topicId], references: [id, topicId], onDelete: Cascade)
+  topic       Topic             @relation(fields: [topicId], references: [id], onDelete: Restrict)
+  group       RegistrationGroup @relation(fields: [groupId, topicId], references: [id, topicId], onDelete: Cascade)
+  submittedBy StudentProfile?   @relation("SubmissionAuthor", fields: [submittedById], references: [id], onDelete: SetNull)
 
   @@index([topicId])
+  // The hot read is "this group's history of this kind of submission, newest
+  // first", which is what both screens are built on.
+  @@index([groupId, submissionType, version])
   @@map("submissions")
 }
 
