@@ -18,6 +18,7 @@ import { ProposalsModule } from './proposals/proposals.module';
 import { RegistrationModule } from './registration/registration.module';
 import { RoundsModule } from './rounds/rounds.module';
 import { SemestersModule } from './semesters/semesters.module';
+import { StudentsModule } from './students/students.module';
 import { SubmissionsModule } from './submissions/submissions.module';
 import { TopicsModule } from './topics/topics.module';
 import { UsersModule } from './users/users.module';
@@ -56,6 +57,7 @@ import { UsersModule } from './users/users.module';
     SemestersModule,
     ProjectTypesModule,
     ProposalsModule,
+    StudentsModule,
     SubmissionsModule,
     TopicsModule,
     RegistrationModule,

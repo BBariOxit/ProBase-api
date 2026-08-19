@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { RoundsModule } from '../rounds/rounds.module';
+import { StudentsModule } from '../students/students.module';
 import { AllocationController } from './allocation.controller';
 import { AllocationService } from './allocation.service';
 import { RegistrationGroupsController } from './registration-groups.controller';
@@ -21,7 +22,7 @@ import { TopicRegistrationController } from './topic-registration.controller';
  * outside this module has any business calling it.
  */
 @Module({
-  imports: [RoundsModule, NotificationsModule],
+  imports: [RoundsModule, NotificationsModule, StudentsModule],
   controllers: [
     RegistrationGroupsController,
     TopicRegistrationController,

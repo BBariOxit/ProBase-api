@@ -20,6 +20,7 @@ import {
 import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { RoundPhaseService } from '../rounds/round-phase.service';
+import { StudentRosterService } from '../students/student-roster.service';
 import { FinalizeRoundDto, PlaceStudentDto } from './dto/allocation.dto';
 import { statusForSeats } from './group-seats';
 
@@ -46,6 +47,7 @@ export class AllocationService {
     private readonly prisma: PrismaService,
     private readonly phases: RoundPhaseService,
     private readonly notifications: NotificationsService,
+    private readonly roster: StudentRosterService,
   ) {}
 
   /**
@@ -407,52 +409,31 @@ export class AllocationService {
   /**
    * Students this round covers who have nowhere to be.
    *
+   * Asked of the shared roster rather than queried here, and that is the whole
+   * reason the roster exists: the faculty's student list asks the same question
+   * with different filters, and two implementations of "has a topic this term"
+   * are two screens that will one day report different numbers about the same
+   * student.
+   *
    * "Covers" is by intake, because that is the only thing a round is declared
    * against. Having a group is checked across the whole semester rather than
    * within this round: a student holds one place per term, so somebody already
-   * on a Cơ sở topic is not waiting for a Tốt nghiệp seat — they are done.
-   *
-   * That also means two rounds in one semester share a single pool of students,
-   * and a student placed at one desk disappears from the other. The database
-   * enforces it; this only reports it.
+   * on a Cơ sở topic is not waiting for a Tốt nghiệp seat — they are done. That
+   * also means two rounds in one semester share a single pool of students, and
+   * a student placed at one desk disappears from the other.
    */
   private async unplacedStudents(round: RoundRow) {
     const cohorts = round.eligibilities.map((rule) => rule.cohort);
 
+    // No declared intake means the round covers nobody yet, which is not the
+    // same question as "everybody" — and an empty filter would ask that one.
     if (cohorts.length === 0) return [];
 
-    const students = await this.prisma.studentProfile.findMany({
-      where: {
-        cohort: { in: cohorts },
-        // A locked or departed account is not somebody the office is still
-        // trying to place.
-        user: { isActive: true },
-        groupMemberships: {
-          none: {
-            semesterId: round.semesterId,
-            status: GroupMemberStatus.ACCEPTED,
-            group: { status: { not: RegistrationGroupStatus.REJECTED } },
-          },
-        },
-      },
-      select: {
-        id: true,
-        studentCode: true,
-        fullName: true,
-        class: true,
-        cohort: true,
-        major: { select: { id: true, name: true, code: true } },
-        user: { select: { id: true, email: true, avatarUrl: true } },
-      },
-      orderBy: { studentCode: 'asc' },
+    return this.roster.find({
+      semesterId: round.semesterId,
+      cohorts,
+      hasGroup: false,
     });
-
-    return students.map(({ user, ...student }) => ({
-      ...student,
-      userId: user.id,
-      email: user.email,
-      avatarUrl: user.avatarUrl,
-    }));
   }
 
   /**
