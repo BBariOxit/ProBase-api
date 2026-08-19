@@ -12,6 +12,7 @@ import {
   TopicProposalStatus,
   TopicStatus,
 } from '../../generated/prisma/client';
+import { MentoringLoadService } from '../lecturers/mentoring-load.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { RoundPhaseService } from '../rounds/round-phase.service';
@@ -78,6 +79,7 @@ export class ProposalsService {
     private readonly rounds: RoundsService,
     private readonly phases: RoundPhaseService,
     private readonly notifications: NotificationsService,
+    private readonly mentoring: MentoringLoadService,
   ) {}
 
   /**
@@ -258,6 +260,13 @@ export class ProposalsService {
     );
     await this.phases.requireCanAcceptProposal(round.id);
 
+    // Last of the three gates, and the only one about the lecturer rather than
+    // the calendar. Checked here rather than when the student registers: the
+    // ceiling is the faculty's arrangement with this lecturer, and a student
+    // turned away at the register button for it would be paying for a
+    // conversation they were never part of.
+    await this.mentoring.requireRoomForOneMore(lecturer, proposal.semesterId);
+
     const topic = await this.prisma.$transaction(async (tx) => {
       const created = await tx.topic.create({
         data: {
@@ -348,7 +357,14 @@ export class ProposalsService {
   private async requireOwnLecturerProfile(userId: number) {
     const lecturer = await this.prisma.lecturerProfile.findUnique({
       where: { userId },
-      select: { id: true, fullName: true, academicTitle: true },
+      // The quota comes along because accepting is the one action that has to
+      // weigh it, and this is the only read of the profile that action makes.
+      select: {
+        id: true,
+        fullName: true,
+        academicTitle: true,
+        maxMentoringQuota: true,
+      },
     });
 
     if (!lecturer) {
