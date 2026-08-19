@@ -7,6 +7,8 @@ import {
 import * as bcrypt from 'bcrypt';
 import { randomInt } from 'crypto';
 import { MailService } from '../mail/mail.service';
+import { Role } from '../../generated/prisma/client';
+import { recordAudit } from '../audit/audit-entry';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { QueryUsersDto } from './dto/query-users.dto';
@@ -214,7 +216,7 @@ export class UsersService {
 
   // ── create ────────────────────────────────────────────────
 
-  async create(dto: CreateUserDto) {
+  async create(dto: CreateUserDto, actorId: number) {
     const existing = await this.prisma.user.findUnique({
       where: { email: dto.email },
     });
@@ -236,6 +238,20 @@ export class UsersService {
         const codeLabel = dto.role === 'STUDENT' ? 'Student' : 'Lecturer';
         throw new ConflictException(`${codeLabel} code is already in use`);
       },
+    );
+
+    // Recorded after the account exists rather than inside its transaction:
+    // createAccountWithProfile owns that one, and an account that was created is
+    // a fact whether or not the line describing it lands. The reverse — a line
+    // claiming an account that does not exist — is the direction worth avoiding.
+    await this.prisma.$transaction((tx) =>
+      recordAudit(tx, {
+        userId: actorId,
+        action: 'CREATE_USER',
+        targetTable: 'users',
+        targetId: user.id,
+        newValue: { email: user.email, role: user.role },
+      }),
     );
 
     await this.mailService.sendAccountCreated({
@@ -371,8 +387,8 @@ export class UsersService {
 
   // ── update ────────────────────────────────────────────────
 
-  async update(id: number, dto: UpdateUserDto) {
-    await this.findOne(id);
+  async update(id: number, dto: UpdateUserDto, actorId: number) {
+    const user = await this.findOne(id);
 
     if (dto.email) {
       const conflict = await this.prisma.user.findUnique({
@@ -383,11 +399,71 @@ export class UsersService {
       }
     }
 
-    return this.prisma.user.update({
-      where: { id },
-      data: dto,
-      select: USER_SELECT,
+    if (dto.role && dto.role !== user.role) {
+      this.requireProfileForRole(dto.role, user);
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      const updated = await tx.user.update({
+        where: { id },
+        data: dto,
+        select: USER_SELECT,
+      });
+
+      await recordAudit(tx, {
+        userId: actorId,
+        action: 'UPDATE_USER',
+        targetTable: 'users',
+        targetId: id,
+        // Only the fields that actually moved, so the entry reads as the change
+        // rather than as a snapshot somebody has to diff by eye.
+        oldValue: {
+          ...(dto.email !== undefined && { email: user.email }),
+          ...(dto.role !== undefined && { role: user.role }),
+          ...(dto.isActive !== undefined && { isActive: user.isActive }),
+        },
+        newValue: { ...dto },
+      });
+
+      return updated;
     });
+  }
+
+  /**
+   * A role is only worth changing to one the account can actually be.
+   *
+   * Every relation in this system points at a profile, not at the account: a
+   * lecturer's topics hang off LecturerProfile, a student's groups off
+   * StudentProfile. Changing the role without one leaves an account its own role
+   * has no room for — a lecturer who cannot own a topic, a student who cannot
+   * join a group — and nothing downstream would notice until somebody tried.
+   *
+   * Refused rather than fixed up, because the profile cannot be created first:
+   * both profile endpoints check the current role, so the only order that could
+   * work is this one being blocked. In practice that means somebody genuinely
+   * changing what a person does gets a second account, which is the honest answer
+   * — their student record and their lecturer record are different people as far
+   * as every foreign key here is concerned. The one case this still allows is
+   * changing back: a lecturer briefly made an admin keeps their profile, so the
+   * mistake can be undone.
+   */
+  private requireProfileForRole(
+    role: Role,
+    // Only whether each block is there, never what is in it.
+    user: { studentProfile: object | null; lecturerProfile: object | null },
+  ): void {
+    if (role === 'ADMIN') return;
+
+    const profile =
+      role === 'STUDENT' ? user.studentProfile : user.lecturerProfile;
+
+    if (profile) return;
+
+    throw new ConflictException(
+      role === 'STUDENT'
+        ? 'Tài khoản này chưa có hồ sơ sinh viên, nên chuyển sang vai trò sinh viên sẽ tạo ra một tài khoản không dùng được. Tạo tài khoản sinh viên mới thay vì đổi vai trò.'
+        : 'Tài khoản này chưa có hồ sơ giảng viên, nên chuyển sang vai trò giảng viên sẽ tạo ra một tài khoản không dùng được. Tạo tài khoản giảng viên mới thay vì đổi vai trò.',
+    );
   }
 
   // ── remove ────────────────────────────────────────────────
@@ -404,28 +480,36 @@ export class UsersService {
    * FR_ADM_01 asks for "khóa (deactivate)" alongside delete; this is that.
    * Reactivation goes through PATCH /users/:id with isActive.
    */
-  async remove(id: number) {
+  async remove(id: number, actorId: number) {
     const user = await this.findOne(id);
 
     if (!user.isActive) {
       throw new ConflictException(`User #${id} is already deactivated`);
     }
 
-    await this.prisma.user.update({
-      where: { id },
-      data: { isActive: false },
-    });
+    await this.prisma.$transaction(async (tx) => {
+      await tx.user.update({ where: { id }, data: { isActive: false } });
 
-    // Deactivation has to take effect now, not whenever the current access
-    // token happens to expire.
-    await this.prisma.refreshToken.deleteMany({ where: { userId: id } });
+      // Deactivation has to take effect now, not whenever the current access
+      // token happens to expire.
+      await tx.refreshToken.deleteMany({ where: { userId: id } });
+
+      await recordAudit(tx, {
+        userId: actorId,
+        action: 'DEACTIVATE_USER',
+        targetTable: 'users',
+        targetId: id,
+        oldValue: { email: user.email, role: user.role, isActive: true },
+        newValue: { isActive: false },
+      });
+    });
 
     return { message: `User #${id} deactivated successfully` };
   }
 
   // ── resetPassword ─────────────────────────────────────────
 
-  async resetPassword(id: number) {
+  async resetPassword(id: number, actorId: number) {
     const user = await this.findOne(id);
 
     // Same pattern as create(): admin never sets the password directly — a
@@ -433,13 +517,26 @@ export class UsersService {
     const tempPassword = this.generateTempPassword();
     const passwordHash = await bcrypt.hash(tempPassword, 10);
 
-    await this.prisma.user.update({
-      where: { id },
-      data: { password: passwordHash, mustChangePassword: true },
-    });
+    await this.prisma.$transaction(async (tx) => {
+      await tx.user.update({
+        where: { id },
+        data: { password: passwordHash, mustChangePassword: true },
+      });
 
-    // Revoke all refresh tokens so the user must re-login
-    await this.prisma.refreshToken.deleteMany({ where: { userId: id } });
+      // Revoke all refresh tokens so the user must re-login
+      await tx.refreshToken.deleteMany({ where: { userId: id } });
+
+      // The one action here somebody reports as an intrusion — "my password
+      // changed and I did not do it" — so who did it and when is the whole
+      // question. Nothing about the password itself is recorded.
+      await recordAudit(tx, {
+        userId: actorId,
+        action: 'RESET_USER_PASSWORD',
+        targetTable: 'users',
+        targetId: id,
+        newValue: { email: user.email, mustChangePassword: true },
+      });
+    });
 
     await this.mailService.sendPasswordReset({
       to: user.email,
@@ -453,7 +550,11 @@ export class UsersService {
 
   // ── upsertStudentProfile ──────────────────────────────────
 
-  async upsertStudentProfile(id: number, dto: UpsertStudentProfileDto) {
+  async upsertStudentProfile(
+    id: number,
+    dto: UpsertStudentProfileDto,
+    actorId: number,
+  ) {
     const user = await this.findOne(id);
 
     // Prevent assigning a student profile to a non-student account
@@ -473,16 +574,51 @@ export class UsersService {
       );
     }
 
-    return this.prisma.studentProfile.upsert({
-      where: { userId: id },
-      create: { userId: id, ...dto },
-      update: dto,
+    return this.prisma.$transaction(async (tx) => {
+      const before = await tx.studentProfile.findUnique({
+        where: { userId: id },
+        select: {
+          studentCode: true,
+          fullName: true,
+          class: true,
+          cohort: true,
+        },
+      });
+
+      const profile = await tx.studentProfile.upsert({
+        where: { userId: id },
+        create: { userId: id, ...dto },
+        update: dto,
+      });
+
+      // Audited because the student code is not a label: the intake read out of
+      // it decides which round this person may register in, so correcting one is
+      // a change to what they are allowed to do, not to how they are spelled.
+      await recordAudit(tx, {
+        userId: actorId,
+        action: 'UPDATE_STUDENT_PROFILE',
+        targetTable: 'student_profiles',
+        targetId: profile.id,
+        ...(before && { oldValue: before }),
+        newValue: {
+          studentCode: profile.studentCode,
+          fullName: profile.fullName,
+          class: profile.class,
+          cohort: profile.cohort,
+        },
+      });
+
+      return profile;
     });
   }
 
   // ── upsertLecturerProfile ─────────────────────────────────
 
-  async upsertLecturerProfile(id: number, dto: UpsertLecturerProfileDto) {
+  async upsertLecturerProfile(
+    id: number,
+    dto: UpsertLecturerProfileDto,
+    actorId: number,
+  ) {
     const user = await this.findOne(id);
 
     if (user.role !== 'LECTURER') {
@@ -501,10 +637,41 @@ export class UsersService {
       );
     }
 
-    return this.prisma.lecturerProfile.upsert({
-      where: { userId: id },
-      create: { userId: id, ...dto },
-      update: dto,
+    return this.prisma.$transaction(async (tx) => {
+      const before = await tx.lecturerProfile.findUnique({
+        where: { userId: id },
+        select: {
+          lecturerCode: true,
+          fullName: true,
+          academicTitle: true,
+          maxMentoringQuota: true,
+        },
+      });
+
+      const profile = await tx.lecturerProfile.upsert({
+        where: { userId: id },
+        create: { userId: id, ...dto },
+        update: dto,
+      });
+
+      // The mentoring quota is the reason this one is audited: it is the number
+      // that decides whether a lecturer may accept another proposal, so lowering
+      // it is a decision about somebody else's workload that they did not make.
+      await recordAudit(tx, {
+        userId: actorId,
+        action: 'UPDATE_LECTURER_PROFILE',
+        targetTable: 'lecturer_profiles',
+        targetId: profile.id,
+        ...(before && { oldValue: before }),
+        newValue: {
+          lecturerCode: profile.lecturerCode,
+          fullName: profile.fullName,
+          academicTitle: profile.academicTitle,
+          maxMentoringQuota: profile.maxMentoringQuota,
+        },
+      });
+
+      return profile;
     });
   }
 

@@ -148,6 +148,8 @@ function withActiveGroup<T extends TopicWithGroups>(
     hasGroup: boolean;
     /** The topic came out of somebody else's proposal, so it is not on offer. */
     reservedForOther: boolean;
+    /** The group already on this topic is one the reader belongs to. */
+    inThisGroup: boolean;
   },
 ) {
   const { registrationGroups, round, sourceProposal, ...rest } = topic;
@@ -211,6 +213,17 @@ function withActiveGroup<T extends TopicWithGroups>(
    */
   const alreadyInAGroup = viewer?.hasGroup ?? null;
 
+  /**
+   * Whether the group on this topic is the reader's own, or null when there is
+   * no group or no reader to ask about.
+   *
+   * Separate from `alreadyInAGroup`, which is true for every topic once a
+   * student holds a place anywhere — this one is true for exactly the topic they
+   * hold, and it is what stops their own project being labelled as somebody
+   * else's.
+   */
+  const isMyGroup = viewer === undefined ? null : viewer.inThisGroup;
+
   if (!group) {
     return {
       ...rest,
@@ -225,6 +238,10 @@ function withActiveGroup<T extends TopicWithGroups>(
       alreadyInAGroup,
       fromProposal,
       proposedByMe,
+      // No group at all, so whose it is has no answer — null rather than false,
+      // the same way every other viewer-dependent field here reports a question
+      // that does not apply.
+      isMyGroup: null,
     };
   }
 
@@ -266,6 +283,7 @@ function withActiveGroup<T extends TopicWithGroups>(
     alreadyInAGroup,
     fromProposal,
     proposedByMe,
+    isMyGroup,
   };
 }
 
@@ -382,6 +400,7 @@ export class TopicsService {
    */
   private async availabilityFor(
     items: {
+      id: number;
       semester: { id: number };
       round: TopicRound;
       sourceProposal: { studentId: number } | null;
@@ -411,9 +430,10 @@ export class TopicsService {
     // per semester, enforced by the database. Without this the browse screen
     // would offer a register button to everyone who already has a place, which
     // is nearly the whole cohort once an extension is running.
-    const taken = await this.semestersWhereIHaveAGroup(userId, semesterIds);
+    const mine = await this.myPlaces(userId, semesterIds);
 
     return (topic: {
+      id: number;
       semester: { id: number };
       round: TopicRound;
       sourceProposal: { studentId: number } | null;
@@ -428,7 +448,12 @@ export class TopicsService {
         // The register endpoint refuses a round the caller's intake is not open
         // for, so a button offering it here would be a button that lies.
         eligible: eligible.has(topic.round.id),
-        hasGroup: taken.has(topic.semester.id),
+        hasGroup: mine.semesters.has(topic.semester.id),
+        // The group holding this topic is one the reader is in. Read together
+        // with `activeGroup`, it is the difference between "đã có nhóm" and
+        // "nhóm của bạn" — and a screen with only the first can tell a student
+        // their own topic was taken by somebody else.
+        inThisGroup: mine.topics.has(topic.id),
         // A topic written out of a proposal is that student's until the gate
         // shuts; to everybody else it is not on offer, and the register
         // endpoint refuses it for the same reason.
@@ -439,10 +464,16 @@ export class TopicsService {
     };
   }
 
-  private async semestersWhereIHaveAGroup(
-    userId: number,
-    semesterIds: number[],
-  ) {
+  /**
+   * The places this caller already holds — by term, and by the topic itself.
+   *
+   * The term is what stops the register button being offered to somebody who
+   * already has a place. The topic is a different question with a different
+   * answer: it is how a screen can tell "somebody took this" from "you took
+   * this", which are the same fact about the topic and opposite facts about the
+   * reader.
+   */
+  private async myPlaces(userId: number, semesterIds: number[]) {
     const rows = await this.prisma.registrationGroupMember.findMany({
       where: {
         student: { userId },
@@ -450,10 +481,13 @@ export class TopicsService {
         status: GroupMemberStatus.ACCEPTED,
         group: { status: { not: RegistrationGroupStatus.REJECTED } },
       },
-      select: { semesterId: true },
+      select: { semesterId: true, group: { select: { topicId: true } } },
     });
 
-    return new Set(rows.map((row) => row.semesterId));
+    return {
+      semesters: new Set(rows.map((row) => row.semesterId)),
+      topics: new Set(rows.map((row) => row.group.topicId)),
+    };
   }
 
   /**

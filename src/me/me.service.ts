@@ -3,7 +3,9 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { Prisma } from '../../generated/prisma/client';
 import { CloudinaryService } from '../cloudinary/cloudinary.service';
+import { MentoringLoadService } from '../lecturers/mentoring-load.service';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   LECTURER_ONLY_FIELDS,
@@ -42,11 +44,16 @@ const LECTURER_FIELDS = {
   maxMentoringQuota: true,
 } as const;
 
+type LecturerRow = Prisma.LecturerProfileGetPayload<{
+  select: typeof LECTURER_FIELDS;
+}>;
+
 @Injectable()
 export class MeService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly cloudinary: CloudinaryService,
+    private readonly mentoring: MentoringLoadService,
   ) {}
 
   /**
@@ -81,7 +88,37 @@ export class MeService {
       ...account,
       fullName: studentProfile?.fullName ?? lecturerProfile?.fullName ?? null,
       student: studentProfile,
-      lecturer: lecturerProfile,
+      lecturer: await this.withMentoringLoad(lecturerProfile),
+    };
+  }
+
+  /**
+   * The quota, replaced by what it is a ceiling on.
+   *
+   * `maxMentoringQuota` on its own was a number the screen could only print —
+   * "hạn mức 6 nhóm mỗi kỳ" — while the system did nothing with it and the
+   * lecturer had no way to tell how close to it they were. Sending the load
+   * instead makes the same field answer the question people actually have, and
+   * matches the one the API now enforces when a proposal is accepted.
+   */
+  private async withMentoringLoad(lecturer: LecturerRow | null) {
+    if (!lecturer) return null;
+
+    const semesterId = await this.mentoring.activeSemesterId();
+
+    // Written out field by field rather than spread minus the quota, so that
+    // adding a column to LECTURER_FIELDS never publishes it here by accident —
+    // the same rule the student block above is written under, and for the same
+    // reason a private note once left through `/auth/me`.
+    return {
+      id: lecturer.id,
+      lecturerCode: lecturer.lecturerCode,
+      fullName: lecturer.fullName,
+      academicTitle: lecturer.academicTitle,
+      phone: lecturer.phone,
+      bio: lecturer.bio,
+      researchInterests: lecturer.researchInterests,
+      mentoring: await this.mentoring.loadForOne(lecturer, semesterId),
     };
   }
 

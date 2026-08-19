@@ -4,6 +4,7 @@ import { ConfigModule } from '@nestjs/config';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
+import { AuditModule } from './audit/audit.module';
 import { AuthModule } from './auth/auth.module';
 import { CloudinaryModule } from './cloudinary/cloudinary.module';
 import { LecturersModule } from './lecturers/lecturers.module';
@@ -17,6 +18,8 @@ import { ProposalsModule } from './proposals/proposals.module';
 import { RegistrationModule } from './registration/registration.module';
 import { RoundsModule } from './rounds/rounds.module';
 import { SemestersModule } from './semesters/semesters.module';
+import { StudentsModule } from './students/students.module';
+import { SubmissionsModule } from './submissions/submissions.module';
 import { TopicsModule } from './topics/topics.module';
 import { UsersModule } from './users/users.module';
 
@@ -43,6 +46,7 @@ import { UsersModule } from './users/users.module';
       errorMessage: 'Bạn gửi quá nhiều yêu cầu. Đợi một phút rồi thử lại.',
     }),
     PrismaModule,
+    AuditModule,
     AuthModule,
     CloudinaryModule,
     LecturersModule,
@@ -53,6 +57,8 @@ import { UsersModule } from './users/users.module';
     SemestersModule,
     ProjectTypesModule,
     ProposalsModule,
+    StudentsModule,
+    SubmissionsModule,
     TopicsModule,
     RegistrationModule,
     UsersModule,
