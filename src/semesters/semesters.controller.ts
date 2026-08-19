@@ -37,8 +37,8 @@ export class SemestersController {
 
   @Roles('ADMIN')
   @Post()
-  create(@Body() dto: CreateSemesterDto) {
-    return this.semestersService.create(dto);
+  create(@Body() dto: CreateSemesterDto, @GetUser('id') actorId: number) {
+    return this.semestersService.create(dto, actorId);
   }
 
   @Roles('ADMIN')
@@ -46,20 +46,27 @@ export class SemestersController {
   update(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: UpdateSemesterDto,
+    @GetUser('id') actorId: number,
   ) {
-    return this.semestersService.update(id, dto);
+    return this.semestersService.update(id, dto, actorId);
   }
 
   @Roles('ADMIN')
   @Delete(':id')
-  remove(@Param('id', ParseIntPipe) id: number) {
-    return this.semestersService.remove(id);
+  remove(
+    @Param('id', ParseIntPipe) id: number,
+    @GetUser('id') actorId: number,
+  ) {
+    return this.semestersService.remove(id, actorId);
   }
 
   @Roles('ADMIN')
   @Patch(':id/activate')
-  activate(@Param('id', ParseIntPipe) id: number) {
-    return this.semestersService.activate(id);
+  activate(
+    @Param('id', ParseIntPipe) id: number,
+    @GetUser('id') actorId: number,
+  ) {
+    return this.semestersService.activate(id, actorId);
   }
 
   // ── Registration rounds ───────────────────────────────────
@@ -82,8 +89,9 @@ export class SemestersController {
   setRounds(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: SetSemesterRoundsDto,
+    @GetUser('id') actorId: number,
   ) {
-    return this.roundsService.setSemesterRounds(id, dto);
+    return this.roundsService.setSemesterRounds(id, dto, actorId);
   }
 
   /**

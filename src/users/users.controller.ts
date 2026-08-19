@@ -18,6 +18,7 @@ import {
 import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
 import { ZodValidationPipe } from 'nestjs-zod';
+import { GetUser } from '../auth/decorators/get-user.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { CreateUserSchema } from './dto/create-user.dto';
 import type { CreateUserDto } from './dto/create-user.dto';
@@ -49,8 +50,11 @@ export class UsersController {
   // Body shape depends on `role`, so validation goes through the union schema
   // directly rather than the global pipe's DTO-class lookup.
   @Post()
-  create(@Body(new ZodValidationPipe(CreateUserSchema)) dto: CreateUserDto) {
-    return this.usersService.create(dto);
+  create(
+    @Body(new ZodValidationPipe(CreateUserSchema)) dto: CreateUserDto,
+    @GetUser('id') actorId: number,
+  ) {
+    return this.usersService.create(dto, actorId);
   }
 
   // ── Bulk import ───────────────────────────────────────────
@@ -78,22 +82,32 @@ export class UsersController {
   }
 
   @Patch(':id')
-  update(@Param('id', ParseIntPipe) id: number, @Body() dto: UpdateUserDto) {
-    return this.usersService.update(id, dto);
+  update(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: UpdateUserDto,
+    @GetUser('id') actorId: number,
+  ) {
+    return this.usersService.update(id, dto, actorId);
   }
 
   @Delete(':id')
   @HttpCode(HttpStatus.OK)
-  remove(@Param('id', ParseIntPipe) id: number) {
-    return this.usersService.remove(id);
+  remove(
+    @Param('id', ParseIntPipe) id: number,
+    @GetUser('id') actorId: number,
+  ) {
+    return this.usersService.remove(id, actorId);
   }
 
   // ── Admin reset password ──────────────────────────────────
 
   @Post(':id/reset-password')
   @HttpCode(HttpStatus.OK)
-  resetPassword(@Param('id', ParseIntPipe) id: number) {
-    return this.usersService.resetPassword(id);
+  resetPassword(
+    @Param('id', ParseIntPipe) id: number,
+    @GetUser('id') actorId: number,
+  ) {
+    return this.usersService.resetPassword(id, actorId);
   }
 
   // ── Profiles ──────────────────────────────────────────────
@@ -102,15 +116,17 @@ export class UsersController {
   upsertStudentProfile(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: UpsertStudentProfileDto,
+    @GetUser('id') actorId: number,
   ) {
-    return this.usersService.upsertStudentProfile(id, dto);
+    return this.usersService.upsertStudentProfile(id, dto, actorId);
   }
 
   @Put(':id/lecturer-profile')
   upsertLecturerProfile(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: UpsertLecturerProfileDto,
+    @GetUser('id') actorId: number,
   ) {
-    return this.usersService.upsertLecturerProfile(id, dto);
+    return this.usersService.upsertLecturerProfile(id, dto, actorId);
   }
 }

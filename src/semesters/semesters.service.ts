@@ -4,6 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { recordAudit } from '../audit/audit-entry';
 import { PrismaService } from '../prisma/prisma.service';
 import { RoundsService } from '../rounds/rounds.service';
 import { CreateSemesterDto } from './dto/create-semester.dto';
@@ -57,13 +58,25 @@ export class SemestersService {
     return { ...semester, rounds: await this.rounds.findForSemester(id) };
   }
 
-  async create(dto: CreateSemesterDto) {
+  async create(dto: CreateSemesterDto, actorId: number) {
     await this.checkDuplicateCode(dto.code);
 
-    return this.prisma.semester.create({ data: dto });
+    return this.prisma.$transaction(async (tx) => {
+      const semester = await tx.semester.create({ data: dto });
+
+      await recordAudit(tx, {
+        userId: actorId,
+        action: 'CREATE_SEMESTER',
+        targetTable: 'semesters',
+        targetId: semester.id,
+        newValue: { code: semester.code, name: semester.name },
+      });
+
+      return semester;
+    });
   }
 
-  async update(id: number, dto: UpdateSemesterDto) {
+  async update(id: number, dto: UpdateSemesterDto, actorId: number) {
     const semester = await this.requireSemester(id);
 
     if (dto.code) {
@@ -81,10 +94,31 @@ export class SemestersService {
       throw new BadRequestException('Ngày kết thúc phải sau ngày bắt đầu');
     }
 
-    return this.prisma.semester.update({ where: { id }, data: dto });
+    return this.prisma.$transaction(async (tx) => {
+      const updated = await tx.semester.update({ where: { id }, data: dto });
+
+      await recordAudit(tx, {
+        userId: actorId,
+        action: 'UPDATE_SEMESTER',
+        targetTable: 'semesters',
+        targetId: id,
+        oldValue: {
+          startDate: semester.startDate.toISOString(),
+          endDate: semester.endDate.toISOString(),
+        },
+        newValue: {
+          startDate: updated.startDate.toISOString(),
+          endDate: updated.endDate.toISOString(),
+          ...(dto.code !== undefined && { code: updated.code }),
+          ...(dto.name !== undefined && { name: updated.name }),
+        },
+      });
+
+      return updated;
+    });
   }
 
-  async remove(id: number) {
+  async remove(id: number, actorId: number) {
     const semester = await this.prisma.semester.findUnique({
       where: { id },
       include: {
@@ -100,23 +134,53 @@ export class SemestersService {
       );
     }
 
-    return this.prisma.semester.delete({ where: { id } });
+    // Destructive and irreversible, which is the whole reason it is recorded:
+    // the row is gone, so the log is the only thing left that says it existed.
+    return this.prisma.$transaction(async (tx) => {
+      const deleted = await tx.semester.delete({ where: { id } });
+
+      await recordAudit(tx, {
+        userId: actorId,
+        action: 'DELETE_SEMESTER',
+        targetTable: 'semesters',
+        targetId: id,
+        oldValue: { code: deleted.code, name: deleted.name },
+      });
+
+      return deleted;
+    });
   }
 
-  async activate(id: number) {
+  async activate(id: number, actorId: number) {
     await this.requireSemester(id);
 
-    // Deactivate all semesters, then activate the selected one
-    await this.prisma.$transaction([
-      this.prisma.semester.updateMany({
+    await this.prisma.$transaction(async (tx) => {
+      // Which term was open before, captured inside the transaction that closes
+      // it — this is the one action here that silently changes what every other
+      // screen in the product defaults to.
+      const previous = await tx.semester.findFirst({
+        where: { isActive: true },
+        select: { id: true, code: true },
+      });
+
+      // Deactivate all semesters, then activate the selected one
+      await tx.semester.updateMany({
         where: { isActive: true },
         data: { isActive: false },
-      }),
-      this.prisma.semester.update({
-        where: { id },
-        data: { isActive: true },
-      }),
-    ]);
+      });
+      await tx.semester.update({ where: { id }, data: { isActive: true } });
+
+      await recordAudit(tx, {
+        userId: actorId,
+        action: 'ACTIVATE_SEMESTER',
+        targetTable: 'semesters',
+        targetId: id,
+        ...(previous && {
+          oldValue: { activeSemesterId: previous.id, code: previous.code },
+        }),
+        newValue: { activeSemesterId: id },
+      });
+    });
 
     return this.prisma.semester.findUnique({ where: { id } });
   }

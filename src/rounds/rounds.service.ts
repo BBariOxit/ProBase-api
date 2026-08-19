@@ -13,6 +13,7 @@ import {
   RoundPhase,
 } from '../../generated/prisma/client';
 import { NotificationsService } from '../notifications/notifications.service';
+import { recordAudit } from '../audit/audit-entry';
 import { PrismaService } from '../prisma/prisma.service';
 import { ExtendRoundDto } from './dto/extend-round.dto';
 import { QueryRoundsDto } from './dto/query-rounds.dto';
@@ -204,7 +205,11 @@ export class RoundsService {
    * of "open the semester": the office sends what the rule should be, and
    * working out which rows that implies is this method's job, not theirs.
    */
-  async setSemesterRounds(semesterId: number, dto: SetSemesterRoundsDto) {
+  async setSemesterRounds(
+    semesterId: number,
+    dto: SetSemesterRoundsDto,
+    actorId: number,
+  ) {
     await this.requireSemester(semesterId);
     await this.requireProjectTypes(dto.rounds.map((r) => r.projectTypeId));
 
@@ -292,6 +297,35 @@ export class RoundsService {
 
         await this.replaceCohorts(tx, saved.id, plan.cohorts);
       }
+
+      // One entry for the plan rather than one per round, because that is the
+      // unit the office actually decided: this payload replaces the whole term's
+      // arrangement, and a reader asking "who opened Tốt nghiệp to khóa 2022"
+      // wants the announcement, not three rows they have to reassemble.
+      await recordAudit(tx, {
+        userId: actorId,
+        action: 'SET_SEMESTER_ROUNDS',
+        targetTable: 'semesters',
+        targetId: semesterId,
+        oldValue: {
+          rounds: existing.map((round) => ({
+            projectTypeId: round.projectTypeId,
+            registrationStart: round.registrationStart.toISOString(),
+            registrationEnd: round.registrationEnd.toISOString(),
+          })),
+        },
+        newValue: {
+          rounds: dto.rounds.map((plan) => ({
+            projectTypeId: plan.projectTypeId,
+            registrationStart: plan.registrationStart.toISOString(),
+            registrationEnd: plan.registrationEnd.toISOString(),
+            cohorts: plan.cohorts,
+          })),
+          ...(dropped.length > 0 && {
+            removedProjectTypeIds: dropped.map((round) => round.projectTypeId),
+          }),
+        },
+      });
     });
 
     return this.findForSemester(semesterId);
