@@ -4,6 +4,7 @@ import { ConfigModule } from '@nestjs/config';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
+import { AuditModule } from './audit/audit.module';
 import { AuthModule } from './auth/auth.module';
 import { CloudinaryModule } from './cloudinary/cloudinary.module';
 import { LecturersModule } from './lecturers/lecturers.module';
@@ -43,6 +44,7 @@ import { UsersModule } from './users/users.module';
       errorMessage: 'Bạn gửi quá nhiều yêu cầu. Đợi một phút rồi thử lại.',
     }),
     PrismaModule,
+    AuditModule,
     AuthModule,
     CloudinaryModule,
     LecturersModule,
