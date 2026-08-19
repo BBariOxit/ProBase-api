@@ -22,6 +22,7 @@ import {
 import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { RoundPhaseService } from '../rounds/round-phase.service';
+import { statusForSeats } from './group-seats';
 import { QueryMyGroupDto } from './dto/query-my-group.dto';
 import { RegisterTopicDto } from './dto/register-topic.dto';
 import { UpdateGroupDto } from './dto/update-group.dto';
@@ -162,20 +163,6 @@ function requireProposerOrFree(
   throw new ConflictException(
     'Đề tài này do một sinh viên khác đề xuất, nên chỉ bạn ấy đăng ký được.',
   );
-}
-
-/**
- * A group filling up is what used to be a leader pressing Submit. Nobody presses
- * anything now, so the status follows the seat count — and follows it back down
- * when a member leaves, since a group that is no longer full is forming again.
- */
-function statusForSeats(
-  occupied: number,
-  capacity: number,
-): RegistrationGroupStatus {
-  return occupied >= capacity
-    ? RegistrationGroupStatus.SUBMITTED
-    : RegistrationGroupStatus.FORMING;
 }
 
 @Injectable()

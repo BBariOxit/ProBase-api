@@ -157,6 +157,24 @@ enum NotificationType {
   /// about reaches only the students who happened to look.
   ROUND_EXTENDED
 
+  /// The faculty office placed somebody into a group — the reader themselves, or
+  /// somebody they now share a topic with. Distinct from GROUP_MEMBER_JOINED,
+  /// which says "somebody chose your group": nobody chose anything here, and a
+  /// student told that a stranger joined them would go looking for a decision
+  /// that was never made.
+  GROUP_MEMBER_ASSIGNED
+
+  /// The office put a student onto this lecturer's topic. The second notice in
+  /// this list addressed to staff, and it exists because it is the one thing
+  /// that happens to a supervisor's topic without the supervisor doing anything.
+  TOPIC_STUDENT_ASSIGNED
+
+  /// Allocation for a round is settled. Sent to everybody the round covers,
+  /// including — deliberately — the students it found nothing for: being left
+  /// out is the outcome they most need to hear, and silence is how somebody
+  /// discovers it in week three.
+  ROUND_FINALIZED
+
   SUBMISSION_FEEDBACK
   GRADE_PUBLISHED
   DEADLINE_REMINDER
