@@ -53,6 +53,71 @@ describe('duePhase', () => {
     });
   });
 
+  /**
+   * The dates are days the office named, not instants, and this is where that
+   * gets decided for the whole system.
+   *
+   * A date box sends midnight UTC, which is seven in the morning in Vietnam. Read
+   * literally, a round announced as closing "ngày 02/09" shut while students were
+   * having breakfast on the 2nd, and one opening "ngày 01/09" was still shut for
+   * the first seven hours of it. Both are the system contradicting its own
+   * announcement, so a named day runs from its own midnight to the end of it.
+   *
+   * The clock is fixed for these three, because what they pin down is a boundary
+   * seven hours wide — run against the real clock they would pass all afternoon
+   * and fail overnight.
+   */
+  describe('the day a date names', () => {
+    /** What a date box sends for that calendar day. */
+    const named = (day: string) => new Date(`${day}T00:00:00.000Z`);
+
+    afterEach(() => jest.useRealTimers());
+
+    function at(instant: string) {
+      jest.useFakeTimers().setSystemTime(new Date(instant));
+    }
+
+    it('keeps the gate open through the whole of its closing day', () => {
+      // Midday in Vietnam on the 2nd. Read literally the gate shut at 07:00.
+      at('2026-09-02T05:00:00.000Z');
+
+      expect(
+        duePhase({
+          phase: RoundPhase.OPEN,
+          registrationStart: named('2026-08-20'),
+          registrationEnd: named('2026-09-02'),
+        }),
+      ).toBe(RoundPhase.OPEN);
+    });
+
+    it('closes it once that day is over', () => {
+      // One minute past midnight in Vietnam on the 3rd.
+      at('2026-09-02T17:01:00.000Z');
+
+      expect(
+        duePhase({
+          phase: RoundPhase.OPEN,
+          registrationStart: named('2026-08-20'),
+          registrationEnd: named('2026-09-02'),
+        }),
+      ).toBe(RoundPhase.RECONCILING);
+    });
+
+    it('opens from the first minute of the opening day, not from breakfast', () => {
+      // One in the morning in Vietnam on the 2nd: the day has begun, and the
+      // literal reading would still have the round shut for six more hours.
+      at('2026-09-01T18:00:00.000Z');
+
+      expect(
+        duePhase({
+          phase: RoundPhase.PREP,
+          registrationStart: named('2026-09-02'),
+          registrationEnd: named('2026-09-20'),
+        }),
+      ).toBe(RoundPhase.OPEN);
+    });
+  });
+
   describe('OPEN', () => {
     it('stays open until the deadline is genuinely past', () => {
       expect(

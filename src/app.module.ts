@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
 import { ConfigModule } from '@nestjs/config';
+import { ScheduleModule } from '@nestjs/schedule';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
@@ -16,6 +17,8 @@ import { PrismaModule } from './prisma/prisma.module';
 import { ProjectTypesModule } from './project-types/project-types.module';
 import { ProposalsModule } from './proposals/proposals.module';
 import { RegistrationModule } from './registration/registration.module';
+import { RemindersModule } from './reminders/reminders.module';
+import { ReportsModule } from './reports/reports.module';
 import { RoundsModule } from './rounds/rounds.module';
 import { SemestersModule } from './semesters/semesters.module';
 import { StudentsModule } from './students/students.module';
@@ -45,6 +48,11 @@ import { UsersModule } from './users/users.module';
       // also overwrote the messages that did say something useful.
       errorMessage: 'Bạn gửi quá nhiều yêu cầu. Đợi một phút rồi thử lại.',
     }),
+    // The clock the deadline reminders run on, and the only scheduled work in
+    // the system. Everything else is worked out when somebody looks — which is
+    // the right answer for state, and the wrong one for a notice, because the
+    // reader who needs a reminder is the one not opening the app.
+    ScheduleModule.forRoot(),
     PrismaModule,
     AuditModule,
     AuthModule,
@@ -61,6 +69,8 @@ import { UsersModule } from './users/users.module';
     SubmissionsModule,
     TopicsModule,
     RegistrationModule,
+    RemindersModule,
+    ReportsModule,
     UsersModule,
     MailModule,
   ],

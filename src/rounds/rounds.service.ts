@@ -12,14 +12,21 @@ import {
   Role,
   RoundPhase,
 } from '../../generated/prisma/client';
+import { formatDate } from '../common/named-day.util';
 import { NotificationsService } from '../notifications/notifications.service';
 import { recordAudit } from '../audit/audit-entry';
 import { PrismaService } from '../prisma/prisma.service';
 import { ExtendRoundDto } from './dto/extend-round.dto';
 import { QueryRoundsDto } from './dto/query-rounds.dto';
-import { SetSemesterRoundsDto } from './dto/set-semester-rounds.dto';
+import {
+  deadlineProblems,
+  SetSemesterRoundsDto,
+  type DeadlinePlan,
+} from './dto/set-semester-rounds.dto';
+import { UnlockRoundDto } from './dto/unlock-round.dto';
 import { UpdateRoundDto } from './dto/update-round.dto';
 import { RoundPhaseService } from './round-phase.service';
+import { markTopicsBackOnOffer } from './topic-lifecycle';
 
 const ROUND_SELECT = {
   id: true,
@@ -27,6 +34,8 @@ const ROUND_SELECT = {
   projectTypeId: true,
   registrationStart: true,
   registrationEnd: true,
+  midtermDueAt: true,
+  finalDueAt: true,
   phase: true,
   allocationMode: true,
   finalisedAt: true,
@@ -276,6 +285,11 @@ export class RoundsService {
               data: {
                 registrationStart: plan.registrationStart,
                 registrationEnd: plan.registrationEnd,
+                // Null rather than skipped when absent: this payload replaces
+                // the term's whole arrangement, so a deadline left out is one
+                // the office has taken back.
+                midtermDueAt: plan.midtermDueAt ?? null,
+                finalDueAt: plan.finalDueAt ?? null,
                 ...(plan.allocationMode && {
                   allocationMode: plan.allocationMode,
                 }),
@@ -288,6 +302,8 @@ export class RoundsService {
                 projectTypeId: plan.projectTypeId,
                 registrationStart: plan.registrationStart,
                 registrationEnd: plan.registrationEnd,
+                midtermDueAt: plan.midtermDueAt ?? null,
+                finalDueAt: plan.finalDueAt ?? null,
                 ...(plan.allocationMode && {
                   allocationMode: plan.allocationMode,
                 }),
@@ -350,12 +366,28 @@ export class RoundsService {
       );
     }
 
+    // Checked against the round as it will be, not as it was sent: an edit that
+    // moves only the closing date can still push it past a deadline nobody
+    // mentioned in this request, and the schema alone cannot see that.
+    this.assertDeadlines({
+      registrationEnd,
+      midtermDueAt:
+        dto.midtermDueAt === undefined ? round.midtermDueAt : dto.midtermDueAt,
+      finalDueAt:
+        dto.finalDueAt === undefined ? round.finalDueAt : dto.finalDueAt,
+    });
+
     await this.prisma.$transaction(async (tx) => {
       await tx.registrationRound.update({
         where: { id },
         data: {
           registrationStart,
           registrationEnd,
+          // Absent leaves the deadline alone; an explicit null takes it back.
+          ...(dto.midtermDueAt !== undefined && {
+            midtermDueAt: dto.midtermDueAt,
+          }),
+          ...(dto.finalDueAt !== undefined && { finalDueAt: dto.finalDueAt }),
           ...(dto.allocationMode && { allocationMode: dto.allocationMode }),
         },
       });
@@ -442,6 +474,72 @@ export class RoundsService {
     await this.announceExtension(extended);
 
     return extended;
+  }
+
+  /**
+   * Reopen the allocation of a round that has already been settled.
+   *
+   * A real registry does not offer "cannot be undone" — it offers "undo leaves a
+   * mark", because a round sealed on a mistake is not a hypothetical. What comes
+   * back is the office's desk: the phase returns to RECONCILING, placing and
+   * unplacing work again, and the topics this round set running go back on
+   * offer so seats can be counted.
+   *
+   * Nobody is notified. Every student in the round was told their allocation was
+   * final, and an "actually, not yet" that is immediately followed by the same
+   * result would be two notices for one outcome; whoever unlocked the round is
+   * about to change something, and finalising again is what announces it.
+   */
+  async unlock(id: number, dto: UnlockRoundDto, userId: number) {
+    const phase = await this.phases.resolve(id);
+
+    if (phase !== RoundPhase.FINALIZED) {
+      throw new ConflictException(
+        'Chỉ mở khoá được đợt đã chốt phân bổ. Đợt này chưa chốt nên vẫn đang sửa được bình thường.',
+      );
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      // Guarded on the phase for the same reason `extend` is: two administrators
+      // pressing at once would otherwise both write, and the second would record
+      // itself as the author of an unlock the first had already done.
+      const { count } = await tx.registrationRound.updateMany({
+        where: { id, phase: RoundPhase.FINALIZED },
+        data: {
+          phase: RoundPhase.RECONCILING,
+          // Cleared together with the phase: they say who settled this round,
+          // and it is no longer settled. Leaving them would have the next
+          // finalisation look like an edit to the first one.
+          finalisedAt: null,
+          finalisedById: null,
+        },
+      });
+
+      if (count === 0) {
+        throw new ConflictException(
+          'Đợt này vừa thay đổi trạng thái — tải lại trang rồi thử lại.',
+        );
+      }
+
+      const reopened = await markTopicsBackOnOffer(tx, id);
+
+      await recordAudit(tx, {
+        userId,
+        action: 'UNLOCK_REGISTRATION_ROUND',
+        targetTable: 'registration_rounds',
+        targetId: id,
+        oldValue: { phase: RoundPhase.FINALIZED },
+        newValue: {
+          phase: RoundPhase.RECONCILING,
+          topicsReopened: reopened,
+          // The only record of why an announced allocation was reopened, which
+          // is why the field is required.
+          reason: dto.reason,
+        },
+      });
+    });
+
+    return this.findOne(id);
   }
 
   // ── internals ─────────────────────────────────────────────
@@ -560,12 +658,26 @@ export class RoundsService {
         phase: true,
         registrationStart: true,
         registrationEnd: true,
+        midtermDueAt: true,
+        finalDueAt: true,
       },
     });
 
     if (!round) throw new NotFoundException(`Round ${id} not found`);
 
     return round;
+  }
+
+  /**
+   * Refuses a round whose report deadlines could not happen in that order.
+   *
+   * The same rules the whole-semester plan is validated by, applied to the round
+   * an edit would leave behind rather than to the fields it happened to send.
+   */
+  private assertDeadlines(plan: DeadlinePlan): void {
+    const [problem] = deadlineProblems(plan);
+
+    if (problem) throw new BadRequestException(problem.message);
   }
 
   private async cohortOf(userId: number) {
@@ -600,23 +712,6 @@ export class RoundsService {
 
     throw new NotFoundException(`Project type ${missing.join(', ')} not found`);
   }
-}
-
-/**
- * A deadline as a student reads it.
- *
- * UTC on purpose. These columns are naive timestamps that Prisma writes as UTC,
- * so formatting in the server's local zone would shift the date by the offset —
- * and a deadline printed one day early or late is the one number in a notice
- * that has to be right.
- */
-function formatDate(value: Date): string {
-  return new Intl.DateTimeFormat('vi-VN', {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-    timeZone: 'UTC',
-  }).format(value);
 }
 
 /** Whether a plan actually moves either end of the window. */

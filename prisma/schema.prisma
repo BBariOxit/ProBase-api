@@ -176,6 +176,17 @@ enum NotificationType {
   ROUND_FINALIZED
 
   SUBMISSION_FEEDBACK
+
+  /// The gate closes in a few days and the reader still has no group. The last
+  /// notice that still leaves them able to fix it themselves — after this the
+  /// only remaining route is being placed by the office.
+  REGISTRATION_CLOSING_SOON
+
+  /// A report is due in a few days and the reader's group has not handed that
+  /// one in. Sent per kind of report, so the midterm reminder does not stand in
+  /// for the final one.
+  SUBMISSION_DUE_SOON
+
   GRADE_PUBLISHED
   DEADLINE_REMINDER
 }
@@ -363,6 +374,26 @@ model RegistrationRound {
   phase RoundPhase @default(PREP)
 
   allocationMode AllocationMode @default(FIRST_COME)
+
+  /// When each report is due, for the groups working in this round.
+  ///
+  /// On the round rather than on the semester, for the same reason the
+  /// registration window is: Tốt nghiệp hands in weeks before Cơ sở, and one
+  /// pair of dates for the whole term cannot say that. What stays at semester
+  /// level is the grading deadline, because marking closes once for everybody.
+  ///
+  /// Null means the office has not announced that deadline yet — not that there
+  /// is none — so nothing is due and nobody is reminded. Source code is due with
+  /// the final report; a fourth date for it would be a date the office has to
+  /// keep in step with `finalDueAt` by hand.
+  ///
+  /// Handing in late is never blocked, only marked. Lateness is worked out when
+  /// a submission is read, by comparing it with the deadline standing at that
+  /// moment, rather than stamped on the row: an office that pushes a deadline
+  /// back means the work is no longer late, and a stored flag would go on saying
+  /// it was.
+  midtermDueAt DateTime?
+  finalDueAt   DateTime?
 
   /// Who ended the RECONCILING phase and when. Finalising turns every group's
   /// membership into the official record, so it is an event with an author
@@ -745,6 +776,21 @@ model Notification {
   targetId  Int?
   isRead    Boolean          @default(false)
   createdAt DateTime         @default(now())
+
+  /// What makes a notice a repeat of one already sent, for the notices raised on
+  /// a schedule rather than by somebody's action.
+  ///
+  /// Reminders are re-derived from scratch on every run — "this deadline is
+  /// close and this reader has not been told" — which is what lets a run that
+  /// never happened be caught up by the next one. The same property means an
+  /// unguarded run would send the same reminder every morning until the
+  /// deadline passed, so the sender writes a key here ("SUBMISSION_DUE_SOON:
+  /// round=12:MIDTERM:user=340") and the index below refuses the second copy.
+  ///
+  /// Null for everything raised by an action, because those are not repeats:
+  /// two people joining a group really are two notices. Postgres allows any
+  /// number of nulls in a unique index, so they cost nothing here.
+  dedupeKey String? @unique
 
   // Relations
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)

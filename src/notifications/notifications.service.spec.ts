@@ -79,7 +79,13 @@ describe('NotificationsService', () => {
       expect(prisma.notification.createMany).not.toHaveBeenCalled();
     });
 
-    it('swallows a write failure instead of failing the caller', async () => {
+    /**
+     * Nought rather than a throw, and the number matters as much as the
+     * swallowing: a reminder job reads it to report how much it sent, and a
+     * failed write that answered with the count it hoped for would have the job
+     * log a morning's reminders that never left the building.
+     */
+    it('swallows a write failure, and reports that nothing was written', async () => {
       prisma.notification.createMany.mockRejectedValue(new Error('db down'));
 
       await expect(
@@ -91,7 +97,7 @@ describe('NotificationsService', () => {
             content: 'y',
           },
         ]),
-      ).resolves.toBeUndefined();
+      ).resolves.toBe(0);
     });
   });
 

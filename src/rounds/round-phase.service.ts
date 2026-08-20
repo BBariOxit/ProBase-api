@@ -8,6 +8,7 @@ import {
   RegistrationGroupStatus,
   RoundPhase,
 } from '../../generated/prisma/client';
+import { endOfNamedDay, startOfNamedDay } from '../common/named-day.util';
 import { PrismaService } from '../prisma/prisma.service';
 
 /**
@@ -246,6 +247,12 @@ interface PhaseRow {
  * `registrationEnd`: the column moves forward and the phase records that the
  * window it describes is the second one. One date, one comparison, and no way
  * for an extension to outlive the deadline it was given.
+ *
+ * Both dates are days the office named, not instants, so the window runs from
+ * midnight on the opening day to the end of the closing day — Vietnam time. Read
+ * as bare timestamps they would open and close at seven in the morning, and a
+ * gate announced as closing "ngày 02/09" would shut while students were having
+ * breakfast on the 2nd.
  */
 export function duePhase(round: {
   phase: RoundPhase;
@@ -253,21 +260,17 @@ export function duePhase(round: {
   registrationEnd: Date;
 }): RoundPhase {
   const now = Date.now();
+  const opens = startOfNamedDay(round.registrationStart);
+  const closes = endOfNamedDay(round.registrationEnd);
 
   if (round.phase === RoundPhase.PREP) {
-    if (now > round.registrationEnd.getTime()) {
-      return RoundPhase.RECONCILING;
-    }
+    if (now >= closes) return RoundPhase.RECONCILING;
 
-    return now >= round.registrationStart.getTime()
-      ? RoundPhase.OPEN
-      : RoundPhase.PREP;
+    return now >= opens ? RoundPhase.OPEN : RoundPhase.PREP;
   }
 
   if (round.phase === RoundPhase.OPEN || round.phase === RoundPhase.EXTENDED) {
-    return now > round.registrationEnd.getTime()
-      ? RoundPhase.RECONCILING
-      : round.phase;
+    return now >= closes ? RoundPhase.RECONCILING : round.phase;
   }
 
   return round.phase;

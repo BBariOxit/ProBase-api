@@ -20,6 +20,7 @@ import {
 import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { RoundPhaseService } from '../rounds/round-phase.service';
+import { markTopicsUnderway } from '../rounds/topic-lifecycle';
 import { StudentRosterService } from '../students/student-roster.service';
 import { FinalizeRoundDto, PlaceStudentDto } from './dto/allocation.dto';
 import { statusForSeats } from './group-seats';
@@ -326,11 +327,16 @@ export class AllocationService {
   }
 
   /**
-   * Close the round: every membership in it becomes the official record.
+   * Close the round: every membership in it becomes the official record, and
+   * every topic a group took starts counting as work under way.
    *
    * The last state change a round makes, and the only one no date can make for
    * it — ending RECONCILING means somebody decided the placement work was done,
    * which is why the row records who and when.
+   *
+   * The topics move inside the same transaction as the phase, so a round can
+   * never end up settled with its topics still advertising registration. Getting
+   * that back is `RoundsService.unlock`.
    */
   async finalize(roundId: number, dto: FinalizeRoundDto, adminUserId: number) {
     const round = await this.requireRound(roundId);
@@ -371,6 +377,8 @@ export class AllocationService {
         );
       }
 
+      const underway = await markTopicsUnderway(tx, roundId);
+
       await tx.auditLog.create({
         data: {
           userId: adminUserId,
@@ -380,6 +388,7 @@ export class AllocationService {
           oldValue: { phase: RoundPhase.RECONCILING },
           newValue: {
             phase: RoundPhase.FINALIZED,
+            topicsUnderway: underway,
             unplacedCount: unplaced.length,
             unplacedStudentCodes: unplaced.map(
               (student) => student.studentCode,
