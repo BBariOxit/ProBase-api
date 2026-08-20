@@ -65,6 +65,11 @@ const GROUP_SELECT = {
       round: {
         select: {
           projectType: { select: { id: true, name: true, code: true } },
+          // What the group owes and by when. On the round because Tốt nghiệp
+          // hands in weeks before Cơ sở; null while the office has announced
+          // nothing.
+          midtermDueAt: true,
+          finalDueAt: true,
         },
       },
     },
@@ -751,6 +756,15 @@ export class RegistrationGroupsService {
       // reaches the topic through its round now, and which table it came from is
       // not the client's problem.
       topic: { ...topicRest, projectType: round.projectType },
+      /*
+        The two report deadlines, lifted out of the round because this is the
+        screen a group reads before they have handed anything in — and until
+        then there is no submission to hang a due date off.
+      */
+      deadlines: {
+        midtermDueAt: round.midtermDueAt,
+        finalDueAt: round.finalDueAt,
+      },
       members: members.map((member) => {
         const { user, ...student } = member.student;
 

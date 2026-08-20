@@ -20,6 +20,19 @@ export const UpdateRoundSchema = z.object({
   registrationEnd: z.coerce.date().optional(),
   cohorts: z.array(CohortSchema).min(1).max(20).optional(),
   allocationMode: z.enum(AllocationMode).optional(),
+  /**
+   * The report deadlines, where absent means "leave it" and null means "take it
+   * back" — unlike the whole-semester plan, in which an omission is a removal.
+   * A partial edit cannot tell the two apart any other way.
+   *
+   * Unlike the registration window, these stay editable in every phase. Moving
+   * them is not reopening anything: the gate is a race between students and
+   * changing it retroactively decides who won, while a report deadline only ever
+   * says when work is expected, and a faculty that grants an extra week should
+   * not have to invent a second mechanism to say so.
+   */
+  midtermDueAt: z.coerce.date().nullish(),
+  finalDueAt: z.coerce.date().nullish(),
 });
 
 export class UpdateRoundDto extends createZodDto(UpdateRoundSchema) {}

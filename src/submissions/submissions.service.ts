@@ -10,6 +10,7 @@ import {
   Prisma,
   RegistrationGroupStatus,
   Role,
+  SubmissionType,
 } from '../../generated/prisma/client';
 import { CloudinaryService } from '../cloudinary/cloudinary.service';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -52,11 +53,48 @@ const SUBMISSION_SELECT = {
           lecturer: {
             select: { id: true, fullName: true, academicTitle: true },
           },
+          // Carried only so `present` can say whether this arrived in time. The
+          // round is where report deadlines live, and it never reaches a
+          // response as itself.
+          round: { select: { midtermDueAt: true, finalDueAt: true } },
         },
       },
     },
   },
 } satisfies Prisma.SubmissionSelect;
+
+type SubmissionRow = Prisma.SubmissionGetPayload<{
+  select: typeof SUBMISSION_SELECT;
+}>;
+
+/**
+ * One submission as a caller reads it, with the deadline it was measured
+ * against.
+ *
+ * Lateness is worked out here rather than stored on the row, and that is
+ * deliberate: an office that pushes a deadline back means the work is no longer
+ * late, and a stamped flag would go on saying it was. The trade is that a
+ * deadline moved *forward* retroactively makes old work late — which is the
+ * same thing the office would be announcing anyway.
+ *
+ * Source code is measured against the final report's deadline. It is handed in
+ * with the report, and a fourth date would be a fourth thing to keep in step.
+ */
+function present(submission: SubmissionRow) {
+  const { round, ...topic } = submission.group.topic;
+  const dueAt =
+    submission.submissionType === SubmissionType.MIDTERM
+      ? round.midtermDueAt
+      : round.finalDueAt;
+
+  return {
+    ...submission,
+    group: { ...submission.group, topic },
+    /** Null when the office has announced no deadline for this kind of report. */
+    dueAt,
+    isLate: dueAt !== null && submission.submittedAt > dueAt,
+  };
+}
 
 @Injectable()
 export class SubmissionsService {
@@ -131,7 +169,7 @@ export class SubmissionsService {
         });
       });
 
-      return created;
+      return present(created);
     } catch (error) {
       // The file is already in the provider's account and now nothing points at
       // it, so it is taken back out rather than left to sit there forever.
@@ -188,7 +226,7 @@ export class SubmissionsService {
     ]);
 
     return {
-      items,
+      items: items.map(present),
       total,
       page: query.page,
       limit: query.limit,
