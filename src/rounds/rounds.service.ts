@@ -18,8 +18,10 @@ import { PrismaService } from '../prisma/prisma.service';
 import { ExtendRoundDto } from './dto/extend-round.dto';
 import { QueryRoundsDto } from './dto/query-rounds.dto';
 import { SetSemesterRoundsDto } from './dto/set-semester-rounds.dto';
+import { UnlockRoundDto } from './dto/unlock-round.dto';
 import { UpdateRoundDto } from './dto/update-round.dto';
 import { RoundPhaseService } from './round-phase.service';
+import { markTopicsBackOnOffer } from './topic-lifecycle';
 
 const ROUND_SELECT = {
   id: true,
@@ -442,6 +444,72 @@ export class RoundsService {
     await this.announceExtension(extended);
 
     return extended;
+  }
+
+  /**
+   * Reopen the allocation of a round that has already been settled.
+   *
+   * A real registry does not offer "cannot be undone" — it offers "undo leaves a
+   * mark", because a round sealed on a mistake is not a hypothetical. What comes
+   * back is the office's desk: the phase returns to RECONCILING, placing and
+   * unplacing work again, and the topics this round set running go back on
+   * offer so seats can be counted.
+   *
+   * Nobody is notified. Every student in the round was told their allocation was
+   * final, and an "actually, not yet" that is immediately followed by the same
+   * result would be two notices for one outcome; whoever unlocked the round is
+   * about to change something, and finalising again is what announces it.
+   */
+  async unlock(id: number, dto: UnlockRoundDto, userId: number) {
+    const phase = await this.phases.resolve(id);
+
+    if (phase !== RoundPhase.FINALIZED) {
+      throw new ConflictException(
+        'Chỉ mở khoá được đợt đã chốt phân bổ. Đợt này chưa chốt nên vẫn đang sửa được bình thường.',
+      );
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      // Guarded on the phase for the same reason `extend` is: two administrators
+      // pressing at once would otherwise both write, and the second would record
+      // itself as the author of an unlock the first had already done.
+      const { count } = await tx.registrationRound.updateMany({
+        where: { id, phase: RoundPhase.FINALIZED },
+        data: {
+          phase: RoundPhase.RECONCILING,
+          // Cleared together with the phase: they say who settled this round,
+          // and it is no longer settled. Leaving them would have the next
+          // finalisation look like an edit to the first one.
+          finalisedAt: null,
+          finalisedById: null,
+        },
+      });
+
+      if (count === 0) {
+        throw new ConflictException(
+          'Đợt này vừa thay đổi trạng thái — tải lại trang rồi thử lại.',
+        );
+      }
+
+      const reopened = await markTopicsBackOnOffer(tx, id);
+
+      await recordAudit(tx, {
+        userId,
+        action: 'UNLOCK_REGISTRATION_ROUND',
+        targetTable: 'registration_rounds',
+        targetId: id,
+        oldValue: { phase: RoundPhase.FINALIZED },
+        newValue: {
+          phase: RoundPhase.RECONCILING,
+          topicsReopened: reopened,
+          // The only record of why an announced allocation was reopened, which
+          // is why the field is required.
+          reason: dto.reason,
+        },
+      });
+    });
+
+    return this.findOne(id);
   }
 
   // ── internals ─────────────────────────────────────────────

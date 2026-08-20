@@ -13,6 +13,7 @@ import { GetUser } from '../auth/decorators/get-user.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { ExtendRoundDto } from './dto/extend-round.dto';
 import { QueryRoundsDto } from './dto/query-rounds.dto';
+import { UnlockRoundDto } from './dto/unlock-round.dto';
 import { UpdateRoundDto } from './dto/update-round.dto';
 import { RoundsService } from './rounds.service';
 
@@ -60,5 +61,23 @@ export class RoundsController {
     @GetUser('id') userId: number,
   ) {
     return this.roundsService.extend(id, dto, userId);
+  }
+
+  /**
+   * Reopen the allocation of a round that has already been settled.
+   *
+   * Admin only, and the narrowest door in this controller: it takes back an
+   * outcome every student in the round has already been told is final. What
+   * makes that acceptable is the record it leaves — who, when, and the reason
+   * they had to type.
+   */
+  @Roles('ADMIN')
+  @Post(':id/unlock')
+  unlock(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: UnlockRoundDto,
+    @GetUser('id') userId: number,
+  ) {
+    return this.roundsService.unlock(id, dto, userId);
   }
 }
