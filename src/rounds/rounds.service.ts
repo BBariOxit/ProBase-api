@@ -12,6 +12,7 @@ import {
   Role,
   RoundPhase,
 } from '../../generated/prisma/client';
+import { formatDate } from '../common/deadline-format.util';
 import { NotificationsService } from '../notifications/notifications.service';
 import { recordAudit } from '../audit/audit-entry';
 import { PrismaService } from '../prisma/prisma.service';
@@ -711,23 +712,6 @@ export class RoundsService {
 
     throw new NotFoundException(`Project type ${missing.join(', ')} not found`);
   }
-}
-
-/**
- * A deadline as a student reads it.
- *
- * UTC on purpose. These columns are naive timestamps that Prisma writes as UTC,
- * so formatting in the server's local zone would shift the date by the offset —
- * and a deadline printed one day early or late is the one number in a notice
- * that has to be right.
- */
-function formatDate(value: Date): string {
-  return new Intl.DateTimeFormat('vi-VN', {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-    timeZone: 'UTC',
-  }).format(value);
 }
 
 /** Whether a plan actually moves either end of the window. */

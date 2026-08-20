@@ -21,6 +21,17 @@ export interface NewNotification {
   title: string;
   content: string;
   targetId?: number | null;
+  /**
+   * What makes this notice a repeat of one already sent, for the notices a
+   * schedule raises rather than a person.
+   *
+   * Left unset by everything caused by an action: two people joining a group
+   * really are two notices. A reminder job re-derives its notices from the
+   * deadlines on every run — which is what lets a run that never happened be
+   * caught up by the next one — so it sets a key and lets the database refuse
+   * the second copy.
+   */
+  dedupeKey?: string;
 }
 
 const LIST_SELECT = {
@@ -115,25 +126,36 @@ export class NotificationsService {
    * student's registration, which trades something that matters for something
    * that does not. A notice that never arrives is a worse day; a registration
    * that silently did not happen is a worse system.
+   *
+   * Answers with how many were actually written, which is not always how many
+   * were asked for: a notice carrying a `dedupeKey` that has already been used
+   * is skipped rather than refused, so a reminder job can run twice — or on two
+   * instances at once — and still send each reader one copy.
    */
-  async notify(notices: NewNotification[]): Promise<void> {
-    if (notices.length === 0) return;
+  async notify(notices: NewNotification[]): Promise<number> {
+    if (notices.length === 0) return 0;
 
     try {
-      await this.prisma.notification.createMany({
+      const { count } = await this.prisma.notification.createMany({
         data: notices.map((notice) => ({
           userId: notice.userId,
           type: notice.type,
           title: notice.title,
           content: notice.content,
           targetId: notice.targetId ?? null,
+          dedupeKey: notice.dedupeKey ?? null,
         })),
+        skipDuplicates: true,
       });
+
+      return count;
     } catch (err) {
       this.logger.error(
         `Failed to write ${notices.length} notification(s) of type ${notices[0].type}`,
         err instanceof Error ? err.stack : String(err),
       );
+
+      return 0;
     }
   }
 
