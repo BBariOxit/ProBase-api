@@ -12,7 +12,7 @@ import {
   Role,
   RoundPhase,
 } from '../../generated/prisma/client';
-import { formatDate } from '../common/deadline-format.util';
+import { formatDate } from '../common/named-day.util';
 import { NotificationsService } from '../notifications/notifications.service';
 import { recordAudit } from '../audit/audit-entry';
 import { PrismaService } from '../prisma/prisma.service';

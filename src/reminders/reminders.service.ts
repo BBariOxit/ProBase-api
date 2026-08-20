@@ -7,7 +7,7 @@ import {
   RoundPhase,
   SubmissionType,
 } from '../../generated/prisma/client';
-import { formatDate } from '../common/deadline-format.util';
+import { formatDate } from '../common/named-day.util';
 import {
   NotificationsService,
   type NewNotification,

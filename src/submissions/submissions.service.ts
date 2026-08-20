@@ -13,6 +13,7 @@ import {
   SubmissionType,
 } from '../../generated/prisma/client';
 import { CloudinaryService } from '../cloudinary/cloudinary.service';
+import { endOfNamedDay } from '../common/named-day.util';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
 import {
@@ -80,21 +81,6 @@ type SubmissionRow = Prisma.SubmissionGetPayload<{
  * Source code is measured against the final report's deadline. It is handed in
  * with the report, and a fourth date would be a fourth thing to keep in step.
  */
-const DAY_MS = 24 * 60 * 60 * 1000;
-
-/**
- * When a deadline actually expires: the end of the day the office named, not
- * its first instant.
- *
- * The office picks a calendar day, which the client sends as midnight UTC of
- * that day. Comparing against that value directly would mark a group late at
- * seven in the morning on the very day their report is due — an announcement
- * saying "hạn 22/08" that stops accepting work during breakfast on the 22nd is
- * the system disagreeing with its own notice.
- */
-function expiryOf(dueAt: Date): number {
-  return dueAt.getTime() + DAY_MS;
-}
 
 function present(submission: SubmissionRow) {
   const { round, ...topic } = submission.group.topic;
@@ -109,7 +95,8 @@ function present(submission: SubmissionRow) {
     /** Null when the office has announced no deadline for this kind of report. */
     dueAt,
     isLate:
-      dueAt !== null && submission.submittedAt.getTime() >= expiryOf(dueAt),
+      dueAt !== null &&
+      submission.submittedAt.getTime() >= endOfNamedDay(dueAt),
   };
 }
 
