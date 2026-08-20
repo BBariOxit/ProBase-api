@@ -5,7 +5,6 @@ import {
   NotificationType,
   RegistrationGroupStatus,
   RoundPhase,
-  SubmissionType,
 } from '../../generated/prisma/client';
 import { formatDate } from '../common/named-day.util';
 import {
@@ -28,24 +27,10 @@ const LEAD_DAYS = 3;
 /** The phases in which the gate is still something a student can walk through. */
 const GATE_OPEN: readonly RoundPhase[] = [RoundPhase.OPEN, RoundPhase.EXTENDED];
 
-/** The two reports that have a deadline of their own. */
-const REPORTS = [
-  {
-    kind: SubmissionType.MIDTERM,
-    field: 'midtermDueAt',
-    label: 'báo cáo giữa kỳ',
-  },
-  {
-    kind: SubmissionType.FINAL,
-    field: 'finalDueAt',
-    label: 'báo cáo cuối kỳ',
-  },
-] as const;
-
 /** What one pass of the job did, per kind of reminder. */
 export interface ReminderRun {
   registrationClosingSoon: number;
-  reportsDueSoon: number;
+  submissionsDueSoon: number;
 }
 
 /**
@@ -92,18 +77,18 @@ export class RemindersService {
     const sent = await this.run();
 
     this.logger.log(
-      `Deadline reminders: ${sent.registrationClosingSoon} về hạn đăng ký, ${sent.reportsDueSoon} về hạn nộp báo cáo`,
+      `Deadline reminders: ${sent.registrationClosingSoon} về hạn đăng ký, ${sent.submissionsDueSoon} về hạn nộp bài`,
     );
   }
 
   /** One pass, also reachable by hand so the office never has to wait for 07:00. */
   async run(): Promise<ReminderRun> {
-    const [registrationClosingSoon, reportsDueSoon] = await Promise.all([
+    const [registrationClosingSoon, submissionsDueSoon] = await Promise.all([
       this.remindRegistrationClosing(),
-      this.remindReportsDue(),
+      this.remindSubmissionsDue(),
     ]);
 
-    return { registrationClosingSoon, reportsDueSoon };
+    return { registrationClosingSoon, submissionsDueSoon };
   }
 
   /**
@@ -163,56 +148,48 @@ export class RemindersService {
   }
 
   /**
-   * Groups with a report due and nothing handed in.
+   * Groups with something due and nothing handed in against it.
+   *
+   * Driven by the list each round declares rather than by a fixed pair of
+   * dates, so a faculty that asks for a đề cương and then a quyển báo cáo gets
+   * a reminder for each, named the way the office named it.
    *
    * Only the group that owes the work is written to, not every group in the
    * round: a notice that turns out not to be about you is what teaches people to
    * stop reading the next one. A group that handed something in and then wants
    * to revise it needs no reminder — the deadline is on their screen.
    *
-   * Source code has no reminder of its own. It shares the final report's
-   * deadline, and a second notice about the same date on the same day would be
-   * two lines saying one thing.
+   * Optional items are reminded about too. They are still work the office asked
+   * for; what "optional" changes is whether a group counts as finished without
+   * them, not whether anybody should be told.
    */
-  private async remindReportsDue(): Promise<number> {
-    const window = this.closingWindow();
+  private async remindSubmissionsDue(): Promise<number> {
+    const due = await this.prisma.submissionRequirement.findMany({
+      where: { dueAt: this.closingWindow() },
+      select: { id: true, roundId: true, name: true, dueAt: true },
+    });
+
     const notices: NewNotification[] = [];
 
-    for (const report of REPORTS) {
-      const rounds = await this.prisma.registrationRound.findMany({
-        where: { [report.field]: window },
-        select: {
-          id: true,
-          midtermDueAt: true,
-          finalDueAt: true,
-        },
-      });
+    for (const requirement of due) {
+      const groups = await this.groupsOwing(
+        requirement.roundId,
+        requirement.id,
+      );
 
-      for (const round of rounds) {
-        const dueAt =
-          report.kind === SubmissionType.MIDTERM
-            ? round.midtermDueAt
-            : round.finalDueAt;
-
-        // Cannot happen — the filter above selected on this column — but the
-        // types do not know that, and a reminder about `null` would be worse
-        // than one not sent.
-        if (!dueAt) continue;
-
-        const groups = await this.groupsOwing(round.id, report.kind);
-
-        for (const group of groups) {
-          notices.push(
-            ...group.members.map((member) => ({
-              userId: member.student.userId,
-              type: NotificationType.SUBMISSION_DUE_SOON,
-              title: `Sắp tới hạn nộp ${report.label}`,
-              content: `Nhóm của bạn chưa nộp ${report.label} cho đề tài "${group.topic.title}". Hạn nộp: ${formatDate(dueAt)}. Nộp muộn vẫn được nhận nhưng sẽ bị đánh dấu.`,
-              targetId: group.id,
-              dedupeKey: `SUBMISSION_DUE_SOON:round=${round.id}:${report.kind}:due=${dueAt.toISOString()}:user=${member.student.userId}`,
-            })),
-          );
-        }
+      for (const group of groups) {
+        notices.push(
+          ...group.members.map((member) => ({
+            userId: member.student.userId,
+            type: NotificationType.SUBMISSION_DUE_SOON,
+            title: `Sắp tới hạn nộp ${requirement.name.toLowerCase()}`,
+            content: `Nhóm của bạn chưa nộp ${requirement.name.toLowerCase()} cho đề tài "${group.topic.title}". Hạn nộp: ${formatDate(requirement.dueAt)}. Nộp muộn vẫn được nhận nhưng sẽ bị đánh dấu.`,
+            targetId: group.id,
+            // The deadline is part of the key, so an office that moves it is a
+            // new thing to be told about rather than a repeat.
+            dedupeKey: `SUBMISSION_DUE_SOON:req=${requirement.id}:due=${requirement.dueAt.toISOString()}:user=${member.student.userId}`,
+          })),
+        );
       }
     }
 
@@ -220,18 +197,18 @@ export class RemindersService {
   }
 
   /**
-   * The live groups in a round that have handed in nothing of this kind, with
-   * the accounts to write to.
+   * The live groups in a round that have handed in nothing against this
+   * requirement, with the accounts to write to.
    *
    * Locked accounts are left out: a reminder is an instruction to go and do
    * something, and that account cannot.
    */
-  private async groupsOwing(roundId: number, kind: SubmissionType) {
+  private async groupsOwing(roundId: number, requirementId: number) {
     return this.prisma.registrationGroup.findMany({
       where: {
         status: { not: RegistrationGroupStatus.REJECTED },
         topic: { roundId },
-        submissions: { none: { submissionType: kind } },
+        submissions: { none: { requirementId } },
       },
       select: {
         id: true,

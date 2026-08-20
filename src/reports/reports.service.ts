@@ -4,7 +4,6 @@ import {
   GroupMemberStatus,
   RegistrationGroupStatus,
   RoundPhase,
-  SubmissionType,
   TopicStatus,
 } from '../../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
@@ -52,10 +51,20 @@ export interface ProgressReport {
   roundId: number;
   projectType: { id: number; name: string; code: string };
   groups: number;
-  midtermSubmitted: number;
-  finalSubmitted: number;
+  /** How many documents the office declared as required for this round. */
+  required: number;
+  /** Groups that have handed in every one of them. */
+  complete: number;
   /** Groups whose newest submission has not been answered by their supervisor. */
   awaitingFeedback: number;
+  /** Per document, so the office can see which one the round is stuck on. */
+  items: {
+    requirementId: number;
+    name: string;
+    dueAt: Date;
+    isRequired: boolean;
+    submitted: number;
+  }[];
 }
 
 export interface FacultyReport {
@@ -119,22 +128,30 @@ export class ReportsService {
       orderBy: { projectTypeId: 'asc' },
     });
 
-    const [phases, memberships, groups, topics, majors, submissions] =
-      await Promise.all([
-        this.phases.resolveMany(rounds),
-        this.memberships(semester.id),
-        this.groups(semester.id),
-        this.topicCounts(semester.id),
-        this.majorTotals(),
-        this.submissions(semester.id),
-      ]);
+    const [
+      phases,
+      memberships,
+      groups,
+      topics,
+      majors,
+      submissions,
+      requirements,
+    ] = await Promise.all([
+      this.phases.resolveMany(rounds),
+      this.memberships(semester.id),
+      this.groups(semester.id),
+      this.topicCounts(semester.id),
+      this.majorTotals(),
+      this.submissions(semester.id),
+      this.requirements(semester.id),
+    ]);
 
     return {
       semester,
       rounds: await this.registrationRows(rounds, phases, memberships, topics),
       supervision: await this.supervisionRows(groups, memberships),
       majors: this.majorRows(majors, memberships),
-      progress: this.progressRows(rounds, groups, submissions),
+      progress: this.progressRows(rounds, groups, submissions, requirements),
     };
   }
 
@@ -265,18 +282,23 @@ export class ReportsService {
   }
 
   /**
-   * What each round's groups have handed in.
+   * What each round's groups have handed in, against what the office asked for.
    *
-   * `awaitingFeedback` counts the newest version of each kind only. Every
-   * earlier version has been superseded by the group itself, and counting those
-   * would send the office chasing supervisors over files nobody is waiting on.
+   * A count per document rather than a pair of fixed columns, because the list
+   * is now the faculty's to declare — and because "12/30 nhóm" hides which of
+   * the four documents the round is actually stuck on.
+   *
+   * Every count uses the newest version of each document only. Nothing here is
+   * ever overwritten, so counting rows would report a diligent group three times
+   * and their supervisor as three answers behind.
    */
   private progressRows(
     rounds: RoundRow[],
     groups: GroupRow[],
     submissions: SubmissionRow[],
+    requirements: RequirementRow[],
   ): ProgressReport[] {
-    const newest = newestPerGroupAndType(submissions);
+    const newest = newestPerGroupAndRequirement(submissions);
 
     return rounds.map((round) => {
       const ids = new Set(
@@ -285,18 +307,33 @@ export class ReportsService {
           .map((group) => group.id),
       );
       const mine = newest.filter((row) => ids.has(row.groupId));
+      const items = requirements.filter((one) => one.roundId === round.id);
+      const required = items.filter((one) => one.isRequired);
 
       return {
         roundId: round.id,
         projectType: round.projectType,
         groups: ids.size,
-        midtermSubmitted: countGroups(mine, SubmissionType.MIDTERM),
-        finalSubmitted: countGroups(mine, SubmissionType.FINAL),
+        required: required.length,
+        complete: [...ids].filter((groupId) =>
+          required.every((one) =>
+            mine.some(
+              (row) => row.groupId === groupId && row.requirementId === one.id,
+            ),
+          ),
+        ).length,
         awaitingFeedback: new Set(
           mine
             .filter((row) => row.feedbackAt === null)
             .map((row) => row.groupId),
         ).size,
+        items: items.map((one) => ({
+          requirementId: one.id,
+          name: one.name,
+          dueAt: one.dueAt,
+          isRequired: one.isRequired,
+          submitted: mine.filter((row) => row.requirementId === one.id).length,
+        })),
       };
     });
   }
@@ -404,10 +441,25 @@ export class ReportsService {
       },
       select: {
         groupId: true,
-        submissionType: true,
+        requirementId: true,
         version: true,
         feedbackAt: true,
       },
+    });
+  }
+
+  /** Everything the term's rounds ask their groups to hand in. */
+  private async requirements(semesterId: number): Promise<RequirementRow[]> {
+    return this.prisma.submissionRequirement.findMany({
+      where: { round: { semesterId } },
+      select: {
+        id: true,
+        roundId: true,
+        name: true,
+        dueAt: true,
+        isRequired: true,
+      },
+      orderBy: { sortOrder: 'asc' },
     });
   }
 
@@ -472,9 +524,17 @@ interface MajorTotal {
 
 interface SubmissionRow {
   groupId: number;
-  submissionType: SubmissionType;
+  requirementId: number;
   version: number;
   feedbackAt: Date | null;
+}
+
+interface RequirementRow {
+  id: number;
+  roundId: number;
+  name: string;
+  dueAt: Date;
+  isRequired: boolean;
 }
 
 /** How many times each value appears. */
@@ -489,25 +549,21 @@ function tally(values: number[]): Map<number, number> {
 }
 
 /**
- * The latest version of each kind of report from each group.
+ * The latest version each group handed in against each document.
  *
  * Nothing is ever overwritten here — re-submitting writes a new row one version
  * higher — so counting rows would count a diligent group three times and report
  * their supervisor as three answers behind.
  */
-function newestPerGroupAndType(rows: SubmissionRow[]): SubmissionRow[] {
+function newestPerGroupAndRequirement(rows: SubmissionRow[]): SubmissionRow[] {
   const newest = new Map<string, SubmissionRow>();
 
   for (const row of rows) {
-    const key = `${row.groupId}:${row.submissionType}`;
+    const key = `${row.groupId}:${row.requirementId}`;
     const held = newest.get(key);
 
     if (!held || row.version > held.version) newest.set(key, row);
   }
 
   return [...newest.values()];
-}
-
-function countGroups(rows: SubmissionRow[], kind: SubmissionType): number {
-  return rows.filter((row) => row.submissionType === kind).length;
 }

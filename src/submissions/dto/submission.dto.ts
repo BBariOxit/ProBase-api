@@ -1,6 +1,5 @@
 import { z } from 'zod';
 import { createZodDto } from 'nestjs-zod';
-import { SubmissionType } from '../../../generated/prisma/client';
 
 /**
  * A link somebody may actually follow.
@@ -32,9 +31,16 @@ const externalLink = z
  * because it is the half of "at least one" this schema cannot see.
  */
 export const CreateSubmissionSchema = z.object({
-  submissionType: z.enum(SubmissionType, {
-    message: 'Vui lòng chọn loại bài nộp',
-  }),
+  /**
+   * Which of the round's required documents this is an attempt at.
+   *
+   * An id rather than a kind: what a faculty asks for is a list it declares per
+   * đợt — Đề cương, Quyển báo cáo, Mã nguồn — not a fixed set the code knows
+   * about. The service checks the id belongs to the group's own round, so
+   * sending another đợt's gets a refusal rather than a submission filed against
+   * somebody else's deadline.
+   */
+  requirementId: z.coerce.number('Vui lòng chọn mục cần nộp').int().positive(),
   submissionUrl: externalLink.optional(),
 });
 
@@ -46,7 +52,7 @@ export class CreateSubmissionDto extends createZodDto(CreateSubmissionSchema) {}
  * There is no parameter for whose, so there is nothing to tamper with.
  */
 export const QuerySubmissionsSchema = z.object({
-  submissionType: z.enum(SubmissionType).optional(),
+  requirementId: z.coerce.number().int().positive().optional(),
   /** Staff only — a student's own group is decided by their token. */
   groupId: z.coerce.number().int().positive().optional(),
   topicId: z.coerce.number().int().positive().optional(),

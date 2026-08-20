@@ -21,6 +21,7 @@ import {
 } from '../common/prisma-error.util';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { REQUIREMENT_SELECT } from '../rounds/requirements.service';
 import { RoundPhaseService } from '../rounds/round-phase.service';
 import { statusForSeats } from './group-seats';
 import { QueryMyGroupDto } from './dto/query-my-group.dto';
@@ -65,11 +66,12 @@ const GROUP_SELECT = {
       round: {
         select: {
           projectType: { select: { id: true, name: true, code: true } },
-          // What the group owes and by when. On the round because Tốt nghiệp
-          // hands in weeks before Cơ sở; null while the office has announced
-          // nothing.
-          midtermDueAt: true,
-          finalDueAt: true,
+          // What this group owes and by when, as the office declared it for
+          // the round. Empty while they have declared nothing.
+          requirements: {
+            select: REQUIREMENT_SELECT,
+            orderBy: { sortOrder: 'asc' },
+          },
         },
       },
     },
@@ -757,14 +759,11 @@ export class RegistrationGroupsService {
       // not the client's problem.
       topic: { ...topicRest, projectType: round.projectType },
       /*
-        The two report deadlines, lifted out of the round because this is the
-        screen a group reads before they have handed anything in — and until
-        then there is no submission to hang a due date off.
+        What the group has to hand in, lifted out of the round because this is
+        the screen they read before handing anything in — and until then there
+        is no submission to hang a due date off.
       */
-      deadlines: {
-        midtermDueAt: round.midtermDueAt,
-        finalDueAt: round.finalDueAt,
-      },
+      requirements: round.requirements,
       members: members.map((member) => {
         const { user, ...student } = member.student;
 
