@@ -18,11 +18,7 @@ import { recordAudit } from '../audit/audit-entry';
 import { PrismaService } from '../prisma/prisma.service';
 import { ExtendRoundDto } from './dto/extend-round.dto';
 import { QueryRoundsDto } from './dto/query-rounds.dto';
-import {
-  deadlineProblems,
-  SetSemesterRoundsDto,
-  type DeadlinePlan,
-} from './dto/set-semester-rounds.dto';
+import { SetSemesterRoundsDto } from './dto/set-semester-rounds.dto';
 import { UnlockRoundDto } from './dto/unlock-round.dto';
 import { UpdateRoundDto } from './dto/update-round.dto';
 import { RoundPhaseService } from './round-phase.service';
@@ -34,8 +30,6 @@ const ROUND_SELECT = {
   projectTypeId: true,
   registrationStart: true,
   registrationEnd: true,
-  midtermDueAt: true,
-  finalDueAt: true,
   phase: true,
   allocationMode: true,
   finalisedAt: true,
@@ -285,11 +279,6 @@ export class RoundsService {
               data: {
                 registrationStart: plan.registrationStart,
                 registrationEnd: plan.registrationEnd,
-                // Null rather than skipped when absent: this payload replaces
-                // the term's whole arrangement, so a deadline left out is one
-                // the office has taken back.
-                midtermDueAt: plan.midtermDueAt ?? null,
-                finalDueAt: plan.finalDueAt ?? null,
                 ...(plan.allocationMode && {
                   allocationMode: plan.allocationMode,
                 }),
@@ -302,8 +291,6 @@ export class RoundsService {
                 projectTypeId: plan.projectTypeId,
                 registrationStart: plan.registrationStart,
                 registrationEnd: plan.registrationEnd,
-                midtermDueAt: plan.midtermDueAt ?? null,
-                finalDueAt: plan.finalDueAt ?? null,
                 ...(plan.allocationMode && {
                   allocationMode: plan.allocationMode,
                 }),
@@ -366,28 +353,12 @@ export class RoundsService {
       );
     }
 
-    // Checked against the round as it will be, not as it was sent: an edit that
-    // moves only the closing date can still push it past a deadline nobody
-    // mentioned in this request, and the schema alone cannot see that.
-    this.assertDeadlines({
-      registrationEnd,
-      midtermDueAt:
-        dto.midtermDueAt === undefined ? round.midtermDueAt : dto.midtermDueAt,
-      finalDueAt:
-        dto.finalDueAt === undefined ? round.finalDueAt : dto.finalDueAt,
-    });
-
     await this.prisma.$transaction(async (tx) => {
       await tx.registrationRound.update({
         where: { id },
         data: {
           registrationStart,
           registrationEnd,
-          // Absent leaves the deadline alone; an explicit null takes it back.
-          ...(dto.midtermDueAt !== undefined && {
-            midtermDueAt: dto.midtermDueAt,
-          }),
-          ...(dto.finalDueAt !== undefined && { finalDueAt: dto.finalDueAt }),
           ...(dto.allocationMode && { allocationMode: dto.allocationMode }),
         },
       });
@@ -658,26 +629,12 @@ export class RoundsService {
         phase: true,
         registrationStart: true,
         registrationEnd: true,
-        midtermDueAt: true,
-        finalDueAt: true,
       },
     });
 
     if (!round) throw new NotFoundException(`Round ${id} not found`);
 
     return round;
-  }
-
-  /**
-   * Refuses a round whose report deadlines could not happen in that order.
-   *
-   * The same rules the whole-semester plan is validated by, applied to the round
-   * an edit would leave behind rather than to the fields it happened to send.
-   */
-  private assertDeadlines(plan: DeadlinePlan): void {
-    const [problem] = deadlineProblems(plan);
-
-    if (problem) throw new BadRequestException(problem.message);
   }
 
   private async cohortOf(userId: number) {

@@ -1,9 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import {
-  GroupJoinSource,
-  RoundPhase,
-  SubmissionType,
-} from '../../generated/prisma/client';
+import { GroupJoinSource, RoundPhase } from '../../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { RoundPhaseService } from '../rounds/round-phase.service';
 import { StudentRosterService } from '../students/student-roster.service';
@@ -66,6 +62,17 @@ describe('ReportsService', () => {
       major: { findMany: jest.fn().mockResolvedValue([]) },
       studentProfile: { groupBy: jest.fn().mockResolvedValue([]) },
       submission: { findMany: jest.fn().mockResolvedValue([]) },
+      submissionRequirement: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: 8,
+            roundId: round.id,
+            name: 'Đề cương',
+            dueAt: new Date('2026-08-22T00:00:00.000Z'),
+            isRequired: true,
+          },
+        ]),
+      },
       lecturerProfile: {
         findMany: jest
           .fn()
@@ -113,23 +120,23 @@ describe('ReportsService', () => {
   });
 
   describe('groups waiting on their supervisor', () => {
-    /** Three versions of one report; only the last one is still unanswered. */
+    /** Three versions of one document; only the last is still unanswered. */
     const revised = [
       {
         groupId: 70,
-        submissionType: SubmissionType.MIDTERM,
+        requirementId: 8,
         version: 1,
         feedbackAt: new Date(),
       },
       {
         groupId: 70,
-        submissionType: SubmissionType.MIDTERM,
+        requirementId: 8,
         version: 2,
         feedbackAt: new Date(),
       },
       {
         groupId: 70,
-        submissionType: SubmissionType.MIDTERM,
+        requirementId: 8,
         version: 3,
         feedbackAt: null,
       },
@@ -140,7 +147,8 @@ describe('ReportsService', () => {
 
       const report = await service.summary();
 
-      expect(report.progress[0].midtermSubmitted).toBe(1);
+      expect(report.progress[0].items[0].submitted).toBe(1);
+      expect(report.progress[0].complete).toBe(1);
       expect(report.progress[0].awaitingFeedback).toBe(1);
     });
 
@@ -149,7 +157,7 @@ describe('ReportsService', () => {
         revised[2],
         {
           groupId: 70,
-          submissionType: SubmissionType.MIDTERM,
+          requirementId: 8,
           version: 4,
           feedbackAt: new Date(),
         },
@@ -158,6 +166,36 @@ describe('ReportsService', () => {
       const report = await service.summary();
 
       expect(report.progress[0].awaitingFeedback).toBe(0);
+    });
+
+    /**
+     * "Đủ" is measured against the required documents only. An optional one
+     * left undone must not hold a group out of the finished column, or the
+     * office chases work the faculty never insisted on.
+     */
+    it('does not let an optional document hold a group back', async () => {
+      prisma.submissionRequirement.findMany.mockResolvedValue([
+        {
+          id: 8,
+          roundId: round.id,
+          name: 'Đề cương',
+          dueAt: new Date('2026-08-22T00:00:00.000Z'),
+          isRequired: true,
+        },
+        {
+          id: 9,
+          roundId: round.id,
+          name: 'Slide bảo vệ',
+          dueAt: new Date('2026-12-01T00:00:00.000Z'),
+          isRequired: false,
+        },
+      ]);
+      prisma.submission.findMany.mockResolvedValue([revised[2]]);
+
+      const report = await service.summary();
+
+      expect(report.progress[0].required).toBe(1);
+      expect(report.progress[0].complete).toBe(1);
     });
   });
 });

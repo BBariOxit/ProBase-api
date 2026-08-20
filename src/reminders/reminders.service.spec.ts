@@ -1,9 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import {
-  NotificationType,
-  RoundPhase,
-  SubmissionType,
-} from '../../generated/prisma/client';
+import { NotificationType, RoundPhase } from '../../generated/prisma/client';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { RoundPhaseService } from '../rounds/round-phase.service';
@@ -25,6 +21,7 @@ describe('RemindersService', () => {
   let prisma: {
     registrationRound: { findMany: jest.Mock };
     registrationGroup: { findMany: jest.Mock };
+    submissionRequirement: { findMany: jest.Mock };
   };
   let notifications: {
     notify: jest.Mock;
@@ -47,6 +44,7 @@ describe('RemindersService', () => {
     prisma = {
       registrationRound: { findMany: jest.fn().mockResolvedValue([]) },
       registrationGroup: { findMany: jest.fn().mockResolvedValue([]) },
+      submissionRequirement: { findMany: jest.fn().mockResolvedValue([]) },
     };
     notifications = {
       notify: jest.fn().mockResolvedValue(0),
@@ -83,9 +81,11 @@ describe('RemindersService', () => {
     it('never reaches back past now', async () => {
       await service.run();
 
-      const calls = prisma.registrationRound.findMany.mock.calls as [
-        { where: Record<string, { gt: Date; lte: Date }> },
-      ][];
+      type Call = [{ where: Record<string, { gt: Date; lte: Date }> }];
+      const calls: Call[] = [
+        ...(prisma.registrationRound.findMany.mock.calls as Call[]),
+        ...(prisma.submissionRequirement.findMany.mock.calls as Call[]),
+      ];
 
       for (const [args] of calls) {
         const [range] = Object.values(args.where);
@@ -125,17 +125,16 @@ describe('RemindersService', () => {
     });
   });
 
-  describe('reports due', () => {
-    it('asks only for groups that have handed in nothing of that kind', async () => {
-      prisma.registrationRound.findMany
-        .mockResolvedValueOnce([])
-        .mockResolvedValueOnce([
-          {
-            id: 12,
-            midtermDueAt: new Date('2026-08-22T00:00:00.000Z'),
-            finalDueAt: null,
-          },
-        ]);
+  describe('documents due', () => {
+    it('asks only for groups that have handed in nothing against that document', async () => {
+      prisma.submissionRequirement.findMany.mockResolvedValue([
+        {
+          id: 8,
+          roundId: 12,
+          name: 'Đề cương',
+          dueAt: new Date('2026-08-22T00:00:00.000Z'),
+        },
+      ]);
 
       await service.run();
 
@@ -143,11 +142,42 @@ describe('RemindersService', () => {
         expect.objectContaining({
           where: expect.objectContaining({
             topic: { roundId: 12 },
-            submissions: {
-              none: { submissionType: SubmissionType.MIDTERM },
-            },
+            submissions: { none: { requirementId: 8 } },
           }) as unknown,
         }),
+      );
+    });
+
+    /**
+     * The office moving a deadline is a new thing to be told about, not a repeat
+     * of the notice already sent — which is why the date is in the key and not
+     * just the document.
+     */
+    it('keys the notice to the deadline as well as the document', async () => {
+      prisma.submissionRequirement.findMany.mockResolvedValue([
+        {
+          id: 8,
+          roundId: 12,
+          name: 'Đề cương',
+          dueAt: new Date('2026-08-22T00:00:00.000Z'),
+        },
+      ]);
+      prisma.registrationGroup.findMany.mockResolvedValue([
+        {
+          id: 70,
+          topic: { title: 'Một đề tài' },
+          members: [{ student: { userId: 340 } }],
+        },
+      ]);
+
+      await service.run();
+
+      const [notice] = sent().filter(
+        (one) => one.type === NotificationType.SUBMISSION_DUE_SOON,
+      );
+
+      expect(notice.dedupeKey).toBe(
+        'SUBMISSION_DUE_SOON:req=8:due=2026-08-22T00:00:00.000Z:user=340',
       );
     });
   });

@@ -107,12 +107,6 @@ enum GroupMemberStatus {
   DECLINED
 }
 
-enum SubmissionType {
-  MIDTERM
-  FINAL
-  SOURCE_CODE
-}
-
 // Note: there is deliberately no REVIEWER role here. The reviewer is assigned
 // per topic via CouncilTopic.reviewerId, which is the single source of truth —
 // a duplicate role here would let the two disagree.
@@ -375,25 +369,6 @@ model RegistrationRound {
 
   allocationMode AllocationMode @default(FIRST_COME)
 
-  /// When each report is due, for the groups working in this round.
-  ///
-  /// On the round rather than on the semester, for the same reason the
-  /// registration window is: Tốt nghiệp hands in weeks before Cơ sở, and one
-  /// pair of dates for the whole term cannot say that. What stays at semester
-  /// level is the grading deadline, because marking closes once for everybody.
-  ///
-  /// Null means the office has not announced that deadline yet — not that there
-  /// is none — so nothing is due and nobody is reminded. Source code is due with
-  /// the final report; a fourth date for it would be a date the office has to
-  /// keep in step with `finalDueAt` by hand.
-  ///
-  /// Handing in late is never blocked, only marked. Lateness is worked out when
-  /// a submission is read, by comparing it with the deadline standing at that
-  /// moment, rather than stamped on the row: an office that pushes a deadline
-  /// back means the work is no longer late, and a stored flag would go on saying
-  /// it was.
-  midtermDueAt DateTime?
-  finalDueAt   DateTime?
 
   /// Who ended the RECONCILING phase and when. Finalising turns every group's
   /// membership into the official record, so it is an event with an author
@@ -411,6 +386,7 @@ model RegistrationRound {
   finalisedBy User?       @relation("RoundFinalisedBy", fields: [finalisedById], references: [id], onDelete: SetNull)
 
   eligibilities RoundEligibility[]
+  requirements  SubmissionRequirement[]
   topics        Topic[]
 
   @@unique([semesterId, projectTypeId])
@@ -639,11 +615,70 @@ model RegistrationGroupMember {
 // GROUP 5: SUBMISSIONS
 // ─────────────────────────────────────────────────────────
 
+/// One thing the faculty requires a group to hand in, and by when.
+///
+/// This replaced a fixed list of three kinds — midterm, final, source code —
+/// which was wrong in two ways at once. It mixed *when* something is due with
+/// *what* it is, so "báo cáo giữa kỳ" and "mã nguồn" were offered as if they
+/// were the same sort of choice; and it left out the one document a Vietnamese
+/// đồ án actually opens with, the đề cương, which is its own gate and not an
+/// early report.
+///
+/// Declared per round, because Cơ sở and Tốt nghiệp do not hand in the same
+/// things — the same reason the registration window lives there. Declared as
+/// data rather than an enum, because a faculty that adds a document should not
+/// need a migration, and because this is the third rule in this system the
+/// office types in rather than the code assuming (see RoundEligibility and the
+/// grade weights).
+///
+/// Whose list this is, is a rule in itself: the faculty office writes it, not
+/// individual supervisors. Two students of the same intake whose deadlines
+/// differ because they picked different supervisors is the complaint nobody can
+/// answer, and a per-supervisor schedule makes "how far along is this round"
+/// unanswerable. A supervisor's own "send me chapter two by Friday" is a private
+/// arrangement with their group; when it is built it becomes rows here scoped to
+/// a group instead of a round, which is an added column and not a rewrite.
+model SubmissionRequirement {
+  id      Int    @id @default(autoincrement())
+  roundId Int
+
+  /// What the office calls it — "Đề cương", "Quyển báo cáo", "Mã nguồn".
+  name String
+
+  /// The calendar day it is due, read as running to the end of that day in
+  /// Vietnam. See src/common/named-day.util.ts.
+  dueAt DateTime
+
+  /// Optional items are still reminded about; they just do not count towards a
+  /// group having handed in everything.
+  isRequired Boolean @default(true)
+
+  /// The order the office listed them in, which is the order they fall due and
+  /// the order every screen shows them. Not derived from `dueAt`: two documents
+  /// sharing a deadline still have an order the office meant.
+  sortOrder Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  round       RegistrationRound @relation(fields: [roundId], references: [id], onDelete: Cascade)
+  submissions Submission[]
+
+  /// Two rows with one name would leave a student choosing between identical
+  /// entries with no way to tell which the office meant.
+  @@unique([roundId, name])
+  @@index([roundId, sortOrder])
+  @@map("submission_requirements")
+}
+
 model Submission {
-  id             Int            @id @default(autoincrement())
-  topicId        Int
-  groupId        Int
-  submissionType SubmissionType
+  id            Int @id @default(autoincrement())
+  topicId       Int
+  groupId       Int
+  /// What this is an attempt at. Restrict on delete: a requirement somebody has
+  /// already handed work in against cannot be taken off the list, because doing
+  /// so would delete the work.
+  requirementId Int
 
   /// Where the uploaded file lives, and the handle needed to delete it. Both or
   /// neither: a URL with no handle is a file nothing can ever clean up.
@@ -675,14 +710,15 @@ model Submission {
   // Two constraints on purpose: `topic` keeps direct navigation and querying,
   // while the composite `group` key pins topicId to the group's own topic so
   // the denormalised column cannot drift away from it.
-  topic       Topic             @relation(fields: [topicId], references: [id], onDelete: Restrict)
-  group       RegistrationGroup @relation(fields: [groupId, topicId], references: [id, topicId], onDelete: Cascade)
-  submittedBy StudentProfile?   @relation("SubmissionAuthor", fields: [submittedById], references: [id], onDelete: SetNull)
+  topic       Topic                 @relation(fields: [topicId], references: [id], onDelete: Restrict)
+  group       RegistrationGroup     @relation(fields: [groupId, topicId], references: [id, topicId], onDelete: Cascade)
+  requirement SubmissionRequirement @relation(fields: [requirementId], references: [id], onDelete: Restrict)
+  submittedBy StudentProfile?       @relation("SubmissionAuthor", fields: [submittedById], references: [id], onDelete: SetNull)
 
   @@index([topicId])
-  // The hot read is "this group's history of this kind of submission, newest
-  // first", which is what both screens are built on.
-  @@index([groupId, submissionType, version])
+  // The hot read is "this group's history of this document, newest first",
+  // which is what both screens are built on.
+  @@index([groupId, requirementId, version])
   @@map("submissions")
 }
 

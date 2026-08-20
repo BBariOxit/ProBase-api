@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import ExcelJS from 'exceljs';
+import { formatDate } from '../common/named-day.util';
 import { ReportsService, type FacultyReport } from './reports.service';
 
 /** What each phase is called in a sheet somebody prints and hands round. */
@@ -119,20 +120,38 @@ export class ReportsExportService {
 
     sheet.columns = [
       { header: 'Đợt', key: 'projectType', width: 24 },
+      { header: 'Mục phải nộp', key: 'item', width: 24 },
+      { header: 'Hạn nộp', key: 'dueAt', width: 14 },
+      { header: 'Bắt buộc', key: 'required', width: 10 },
       { header: 'Số nhóm', key: 'groups', width: 10 },
-      { header: 'Đã nộp giữa kỳ', key: 'midterm', width: 16 },
-      { header: 'Đã nộp cuối kỳ', key: 'final', width: 16 },
-      { header: 'Chờ nhận xét', key: 'awaiting', width: 14 },
+      { header: 'Đã nộp', key: 'submitted', width: 10 },
     ];
 
-    for (const row of report.progress) {
+    /*
+      A row per document rather than per round, because the list is the
+      faculty's to declare and its length differs between rounds — one row per
+      round would either lose the detail or need a column per document, and the
+      second is a sheet that changes shape every term.
+
+      The round's own totals come first, then its documents underneath.
+    */
+    for (const round of report.progress) {
       sheet.addRow({
-        projectType: row.projectType.name,
-        groups: row.groups,
-        midterm: row.midtermSubmitted,
-        final: row.finalSubmitted,
-        awaiting: row.awaitingFeedback,
+        projectType: round.projectType.name,
+        item: `Nộp đủ ${round.required} mục bắt buộc`,
+        groups: round.groups,
+        submitted: round.complete,
       });
+
+      for (const item of round.items) {
+        sheet.addRow({
+          item: `   ${item.name}`,
+          dueAt: formatDate(item.dueAt),
+          required: item.isRequired ? 'x' : '',
+          groups: round.groups,
+          submitted: item.submitted,
+        });
+      }
     }
 
     head(sheet);

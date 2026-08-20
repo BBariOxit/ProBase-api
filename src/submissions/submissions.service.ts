@@ -10,10 +10,13 @@ import {
   Prisma,
   RegistrationGroupStatus,
   Role,
-  SubmissionType,
 } from '../../generated/prisma/client';
 import { CloudinaryService } from '../cloudinary/cloudinary.service';
 import { endOfNamedDay } from '../common/named-day.util';
+import {
+  REQUIREMENT_SELECT,
+  RequirementsService,
+} from '../rounds/requirements.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
 import {
@@ -31,8 +34,9 @@ import {
  */
 const SUBMISSION_SELECT = {
   id: true,
-  submissionType: true,
   version: true,
+  /** What this was handed in against, and therefore what it was due by. */
+  requirement: { select: REQUIREMENT_SELECT },
   fileUrl: true,
   fileName: true,
   fileSize: true,
@@ -54,10 +58,6 @@ const SUBMISSION_SELECT = {
           lecturer: {
             select: { id: true, fullName: true, academicTitle: true },
           },
-          // Carried only so `present` can say whether this arrived in time. The
-          // round is where report deadlines live, and it never reaches a
-          // response as itself.
-          round: { select: { midtermDueAt: true, finalDueAt: true } },
         },
       },
     },
@@ -74,29 +74,17 @@ type SubmissionRow = Prisma.SubmissionGetPayload<{
  *
  * Lateness is worked out here rather than stored on the row, and that is
  * deliberate: an office that pushes a deadline back means the work is no longer
- * late, and a stamped flag would go on saying it was. The trade is that a
- * deadline moved *forward* retroactively makes old work late — which is the
- * same thing the office would be announcing anyway.
- *
- * Source code is measured against the final report's deadline. It is handed in
- * with the report, and a fourth date would be a fourth thing to keep in step.
+ * late, and a stamped flag would go on saying it was. A deadline is a calendar
+ * day, so it runs to the end of that day — comparing against its first instant
+ * would mark a group late at seven in the morning of the day their work is due.
  */
-
 function present(submission: SubmissionRow) {
-  const { round, ...topic } = submission.group.topic;
-  const dueAt =
-    submission.submissionType === SubmissionType.MIDTERM
-      ? round.midtermDueAt
-      : round.finalDueAt;
+  const dueAt = submission.requirement.dueAt;
 
   return {
     ...submission,
-    group: { ...submission.group, topic },
-    /** Null when the office has announced no deadline for this kind of report. */
     dueAt,
-    isLate:
-      dueAt !== null &&
-      submission.submittedAt.getTime() >= endOfNamedDay(dueAt),
+    isLate: submission.submittedAt.getTime() >= endOfNamedDay(dueAt),
   };
 }
 
@@ -106,6 +94,7 @@ export class SubmissionsService {
     private readonly prisma: PrismaService,
     private readonly storage: CloudinaryService,
     private readonly notifications: NotificationsService,
+    private readonly requirements: RequirementsService,
   ) {}
 
   /**
@@ -129,6 +118,14 @@ export class SubmissionsService {
     const student = await this.requireStudent(userId);
     const group = await this.requireOwnGroup(student.id);
 
+    // Checked before anything is uploaded, and checked against this group's own
+    // round: nothing in the database ties a requirement to a group, so this is
+    // what stops an id from another đợt being filed against its deadline.
+    const requirement = await this.requirements.requireForRound(
+      dto.requirementId,
+      group.roundId,
+    );
+
     if (!file && !dto.submissionUrl) {
       throw new BadRequestException(
         'Cần tải lên một file hoặc dán một link — nộp trống thì không có gì để chấm.',
@@ -146,10 +143,7 @@ export class SubmissionsService {
         // Read inside the transaction: two members pressing submit together
         // would otherwise both see the same highest version and both claim it.
         const latest = await tx.submission.findFirst({
-          where: {
-            groupId: group.id,
-            submissionType: dto.submissionType,
-          },
+          where: { groupId: group.id, requirementId: requirement.id },
           select: { version: true },
           orderBy: { version: 'desc' },
         });
@@ -158,7 +152,7 @@ export class SubmissionsService {
           data: {
             groupId: group.id,
             topicId: group.topicId,
-            submissionType: dto.submissionType,
+            requirementId: requirement.id,
             version: (latest?.version ?? 0) + 1,
             submittedById: student.id,
             ...(stored && {
@@ -191,7 +185,7 @@ export class SubmissionsService {
    */
   async findAll(query: QuerySubmissionsDto, userId: number, role: Role) {
     const where: Prisma.SubmissionWhereInput = {
-      ...(query.submissionType && { submissionType: query.submissionType }),
+      ...(query.requirementId && { requirementId: query.requirementId }),
     };
 
     if (role === Role.STUDENT) {
@@ -251,8 +245,8 @@ export class SubmissionsService {
       where: { id, topic: { lecturerId: lecturer.id } },
       select: {
         id: true,
-        submissionType: true,
         version: true,
+        requirement: { select: { name: true } },
         group: {
           select: {
             id: true,
@@ -281,12 +275,12 @@ export class SubmissionsService {
         userId: member.student.userId,
         type: NotificationType.SUBMISSION_FEEDBACK,
         title: 'Giảng viên đã nhận xét bài nộp',
-        content: `${lecturerName(lecturer)} vừa nhận xét ${LABEL[submission.submissionType]} (lần ${submission.version}) của đề tài "${submission.group.topic.title}".`,
+        content: `${lecturerName(lecturer)} vừa nhận xét ${submission.requirement.name.toLowerCase()} (lần ${submission.version}) của đề tài "${submission.group.topic.title}".`,
         targetId: submission.group.id,
       })),
     );
 
-    return updated;
+    return present(updated);
   }
 
   // ── guards ────────────────────────────────────────────────
@@ -331,11 +325,25 @@ export class SubmissionsService {
         status: GroupMemberStatus.ACCEPTED,
         group: { status: { not: RegistrationGroupStatus.REJECTED } },
       },
-      select: { group: { select: { id: true, topicId: true } } },
+      select: {
+        group: {
+          select: {
+            id: true,
+            topicId: true,
+            // The round is what the requirement list belongs to, and a group
+            // reaches it only through its topic.
+            topic: { select: { roundId: true } },
+          },
+        },
+      },
       orderBy: { id: 'desc' },
     });
 
-    return membership?.group ?? null;
+    if (!membership) return null;
+
+    const { topic, ...group } = membership.group;
+
+    return { ...group, roundId: topic.roundId };
   }
 
   private async requireOwnGroup(studentId: number) {
@@ -350,13 +358,6 @@ export class SubmissionsService {
     return group;
   }
 }
-
-/** What each kind of submission is called, for a sentence in a notice. */
-const LABEL: Record<string, string> = {
-  MIDTERM: 'báo cáo giữa kỳ',
-  FINAL: 'báo cáo cuối kỳ',
-  SOURCE_CODE: 'mã nguồn',
-};
 
 function lecturerName(lecturer: {
   fullName: string;

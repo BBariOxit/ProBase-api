@@ -6,6 +6,7 @@ import {
   ParseIntPipe,
   Patch,
   Post,
+  Put,
   Query,
 } from '@nestjs/common';
 import { Role } from '../../generated/prisma/client';
@@ -13,13 +14,18 @@ import { GetUser } from '../auth/decorators/get-user.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { ExtendRoundDto } from './dto/extend-round.dto';
 import { QueryRoundsDto } from './dto/query-rounds.dto';
+import { SetRequirementsDto } from './dto/set-requirements.dto';
 import { UnlockRoundDto } from './dto/unlock-round.dto';
 import { UpdateRoundDto } from './dto/update-round.dto';
+import { RequirementsService } from './requirements.service';
 import { RoundsService } from './rounds.service';
 
 @Controller('rounds')
 export class RoundsController {
-  constructor(private readonly roundsService: RoundsService) {}
+  constructor(
+    private readonly roundsService: RoundsService,
+    private readonly requirements: RequirementsService,
+  ) {}
 
   /**
    * Readable by every signed-in role. A round carries the faculty's own
@@ -71,6 +77,32 @@ export class RoundsController {
    * makes that acceptable is the record it leaves — who, when, and the reason
    * they had to type.
    */
+  /**
+   * What this round's groups must hand in, and by when.
+   *
+   * Readable by everyone signed in — it is the faculty's own announcement, and
+   * a student cannot plan around a deadline they are not allowed to see.
+   */
+  @Get(':id/requirements')
+  findRequirements(@Param('id', ParseIntPipe) id: number) {
+    return this.requirements.findForRound(id);
+  }
+
+  /**
+   * Replaces that list. The faculty office's, not a supervisor's: two students
+   * of one intake with different deadlines because they chose different
+   * supervisors is a complaint nobody can answer.
+   */
+  @Roles('ADMIN')
+  @Put(':id/requirements')
+  setRequirements(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: SetRequirementsDto,
+    @GetUser('id') userId: number,
+  ) {
+    return this.requirements.setForRound(id, dto, userId);
+  }
+
   @Roles('ADMIN')
   @Post(':id/unlock')
   unlock(
