@@ -79,7 +79,8 @@ export interface BulkImportResult {
   failed: BulkImportRowResult[];
 }
 
-// Safe user select — never expose password hash
+// Safe user select — never expose password hash.
+// Used for list responses where avatar and session flags are irrelevant.
 const USER_SELECT = {
   id: true,
   email: true,
@@ -87,6 +88,16 @@ const USER_SELECT = {
   isActive: true,
   createdAt: true,
   updatedAt: true,
+} as const;
+
+// Extended select for single-record responses (GET /users/:id).
+// Includes `avatarUrl` so the profile dialog can show the picture, and
+// `mustChangePassword` so it can surface a first-login warning — two fields
+// that carry no value serialised across hundreds of list rows.
+const USER_DETAIL_SELECT = {
+  ...USER_SELECT,
+  avatarUrl: true,
+  mustChangePassword: true,
 } as const;
 
 /**
@@ -203,7 +214,7 @@ export class UsersService {
     const user = await this.prisma.user.findUnique({
       where: { id },
       select: {
-        ...USER_SELECT,
+        ...USER_DETAIL_SELECT,
         studentProfile: true,
         lecturerProfile: true,
       },
